@@ -223,11 +223,16 @@ async def handle_zoom_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             tmp_dir = Path(tempfile.mkdtemp(prefix="zumo-zoom-"))
 
-            # Extract passcode from URL query string if present
+            # Extract passcode from URL query param or message text
             passcode = None
             m = re.search(r"[?&]pwd=(\w+)", url)
             if m:
                 passcode = m.group(1)
+            else:
+                # Look for "Passcode: XYZ" in the message text
+                m = re.search(r"[Pp]asscode[:\s]+(\S+)", text)
+                if m:
+                    passcode = m.group(1)
 
             file_path = download_zoom_recording(url, tmp_dir, passcode)
 
