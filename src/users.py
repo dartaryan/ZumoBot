@@ -12,18 +12,20 @@ def _ensure_users_from_env() -> None:
     """Populate users/ from USERS_CONFIG env var (for containerized deploys).
 
     USERS_CONFIG is a JSON object: {"username": {config}, ...}
-    Files are written only if they don't already exist.
     """
+    import sys
     raw = os.getenv("USERS_CONFIG")
     if not raw:
         return
+    print(f"[USERS_CONFIG] Raw (first 120): {raw[:120]!r}", file=sys.stderr)
     try:
         users = json.loads(raw)
-    except json.JSONDecodeError:
-        print(f"[USERS_CONFIG] Failed to parse JSON. First 80 chars: {raw[:80]!r}")
+    except json.JSONDecodeError as e:
+        print(f"[USERS_CONFIG] JSON parse failed: {e}", file=sys.stderr)
         return
+    print(f"[USERS_CONFIG] Parsed type={type(users).__name__}, keys={list(users.keys()) if isinstance(users, dict) else 'N/A'}", file=sys.stderr)
     if not isinstance(users, dict):
-        print(f"[USERS_CONFIG] Expected dict, got {type(users).__name__}")
+        print(f"[USERS_CONFIG] Expected dict, got {type(users).__name__}", file=sys.stderr)
         return
     USERS_DIR.mkdir(parents=True, exist_ok=True)
     for username, data in users.items():
@@ -31,14 +33,14 @@ def _ensure_users_from_env() -> None:
             try:
                 data = json.loads(data)
             except (json.JSONDecodeError, ValueError):
-                print(f"[USERS_CONFIG] Skipping {username}: value is not valid JSON")
+                print(f"[USERS_CONFIG] Skipping {username}: value is not valid JSON", file=sys.stderr)
                 continue
         if not isinstance(data, dict):
-            print(f"[USERS_CONFIG] Skipping {username}: expected dict, got {type(data).__name__}")
+            print(f"[USERS_CONFIG] Skipping {username}: expected dict, got {type(data).__name__}", file=sys.stderr)
             continue
         path = USERS_DIR / f"{username}.json"
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"[USERS_CONFIG] Wrote {path.name}")
+        print(f"[USERS_CONFIG] Wrote {path.name}", file=sys.stderr)
 
 
 _ensure_users_from_env()
