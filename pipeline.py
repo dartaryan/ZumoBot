@@ -46,6 +46,7 @@ from src.storage import (
     save_session,
     save_session_local,
 )
+from src.dashboard import save_dashboard
 
 
 def process_file(
@@ -198,6 +199,12 @@ def process_file(
                 )
                 print(f"  Saved locally: {local_path}")
                 result["local_path"] = str(local_path)
+
+                # Regenerate dashboard HTML
+                dash_path = save_dashboard(
+                    user.dashboard_slug, user.name, user.web_password_hash,
+                )
+                print(f"  Dashboard: {dash_path}")
             else:
                 ensure_repo_structure(user.dashboard_slug)
                 dashboard_url = save_session(
@@ -253,6 +260,7 @@ def main():
     parser.add_argument("--skip-analysis", action="store_true", help="Transcript only, no Claude analysis")
     parser.add_argument("--skip-diarization", action="store_true", help="Skip speaker diarization")
     parser.add_argument("--init", action="store_true", help="Initialize GitHub repo structure for user")
+    parser.add_argument("--dashboard", action="store_true", help="Regenerate dashboard HTML only")
 
     args = parser.parse_args()
 
@@ -264,6 +272,14 @@ def main():
         sys.exit(1)
 
     language = args.language or user.default_language
+
+    # Dashboard-only mode
+    if args.dashboard:
+        dash_path = save_dashboard(
+            user.dashboard_slug, user.name, user.web_password_hash,
+        )
+        print(f"Dashboard generated: {dash_path}")
+        sys.exit(0)
 
     # Init mode
     if args.init:
