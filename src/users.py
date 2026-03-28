@@ -33,6 +33,10 @@ def _ensure_users_from_env() -> None:
         USERS_DIR.mkdir(parents=True, exist_ok=True)
         path = USERS_DIR / f"{slug}.json"
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Debug: show which fields are populated
+        for k, v in data.items():
+            val_info = f"{str(v)[:20]}..." if v and len(str(v)) > 20 else v
+            print(f"[BOOT]   {k} = {val_info!r}", file=sys.stderr)
         print(f"[BOOT] Wrote user from env vars: {slug}", file=sys.stderr)
         return
 
