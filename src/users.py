@@ -23,6 +23,9 @@ def _ensure_users_from_env() -> None:
         return
     USERS_DIR.mkdir(parents=True, exist_ok=True)
     for username, data in users.items():
+        # Unwrap double-encoded JSON strings
+        if isinstance(data, str):
+            data = json.loads(data)
         path = USERS_DIR / f"{username}.json"
         if not path.exists():
             path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -57,6 +60,9 @@ def load_user(username: str) -> UserConfig:
 
     try:
         data = json.loads(filepath.read_text(encoding="utf-8"))
+        # Handle double-encoded JSON (e.g. from env vars)
+        if isinstance(data, str):
+            data = json.loads(data)
     except json.JSONDecodeError as e:
         raise ValueError(f"Invalid JSON in {filepath}: {e}") from e
 
