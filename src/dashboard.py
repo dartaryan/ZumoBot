@@ -32,11 +32,9 @@ def _detect_type(label: str) -> str:
     return _TYPE_BY_LABEL.get(cleaned, "other")
 
 
-def _parse_transcript(path: Path) -> dict | None:
-    """Parse transcript.md -> {title, meta, content}."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except Exception:
+def _parse_transcript_text(text: str) -> dict | None:
+    """Parse transcript markdown text -> {title, meta, content}."""
+    if not text:
         return None
 
     lines = text.split("\n")
@@ -52,6 +50,15 @@ def _parse_transcript(path: Path) -> dict | None:
     content = text[sep + 5:].strip() if sep >= 0 else ""
 
     return {"title": title, "meta": meta, "content": content}
+
+
+def _parse_transcript(path: Path) -> dict | None:
+    """Parse transcript.md file -> {title, meta, content}."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return None
+    return _parse_transcript_text(text)
 
 
 def _load_sessions(slug: str) -> list[dict]:
@@ -96,6 +103,79 @@ def _load_sessions(slug: str) -> list[dict]:
         })
 
     return sessions
+
+
+def _load_sessions_from_github(slug: str) -> list[dict]:
+    """Load sessions from GitHub repo (for non-local / deployed mode)."""
+    from github import GithubException
+    from .storage import _get_repo
+    from .config import GITHUB_BRANCH
+
+    repo = _get_repo()
+    sessions = []
+
+    try:
+        contents = repo.get_contents(slug, ref=GITHUB_BRANCH)
+    except GithubException:
+        return []
+
+    for item in contents:
+        if item.type != "dir" or len(item.name) < 16 or item.name[4] != "-":
+            continue
+
+        try:
+            tf = repo.get_contents(f"{item.path}/transcript.md", ref=GITHUB_BRANCH)
+            transcript_text = tf.decoded_content.decode("utf-8")
+        except GithubException:
+            continue
+
+        parsed = _parse_transcript_text(transcript_text)
+        if not parsed:
+            continue
+
+        meta = parsed["meta"]
+        stype = _detect_type(meta.get("Session Type", ""))
+
+        analysis = None
+        try:
+            af = repo.get_contents(f"{item.path}/analysis.md", ref=GITHUB_BRANCH)
+            analysis = af.decoded_content.decode("utf-8")
+        except GithubException:
+            pass
+
+        sessions.append({
+            "id": item.name,
+            "title": parsed["title"],
+            "date": meta.get("Date", item.name[:10]),
+            "type": stype,
+            "typeLabel": meta.get("Session Type", "\u05D0\u05D7\u05E8"),
+            "speakers": meta.get("Speakers", "\u2014"),
+            "originalDuration": meta.get("Original Duration", "\u2014"),
+            "trimmedDuration": meta.get("Trimmed Duration", "\u2014"),
+            "transcript": parsed["content"],
+            "analysis": analysis,
+        })
+
+    sessions.sort(key=lambda s: s["id"], reverse=True)
+    return sessions
+
+
+def generate_dashboard_from_github(
+    slug: str, name: str = "", pw_hash: str | None = None,
+) -> str:
+    """Generate dashboard HTML using sessions from GitHub."""
+    sessions = _load_sessions_from_github(slug)
+    logo = _logo_b64()
+    display = html_escape(name or slug)
+
+    return (
+        _TEMPLATE
+        .replace("__LOGO__", logo)
+        .replace("__NAME__", display)
+        .replace("__COUNT__", str(len(sessions)))
+        .replace("__SESSIONS__", _safe_json(sessions))
+        .replace("__PW_HASH__", json.dumps(pw_hash) if pw_hash else "null")
+    )
 
 
 def _safe_json(data) -> str:

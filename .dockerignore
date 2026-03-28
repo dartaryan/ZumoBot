@@ -1,0 +1,9 @@
+output/
+.env
+.venv/
+__pycache__/
+*.pyc
+.git/
+.work/
+design-system/
+HANDOFF-NEXT.md

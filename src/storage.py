@@ -44,8 +44,10 @@ def save_session(
     transcript_md: str,
     analysis_md: str | None,
     summary: str,
+    user_name: str = "",
+    pw_hash: str | None = None,
 ) -> str:
-    """Save a complete session to GitHub and update the user index.
+    """Save a complete session to GitHub, update index, and regenerate dashboard.
 
     Returns dashboard URL with anchor.
     """
@@ -66,6 +68,12 @@ def save_session(
         )
 
     update_user_index(user_folder)
+
+    # Regenerate dashboard HTML on GitHub (best-effort)
+    try:
+        save_dashboard_to_github(user_folder, user_name, pw_hash)
+    except Exception:
+        pass
 
     if DASHBOARD_BASE_URL:
         return f"{DASHBOARD_BASE_URL}/{user_folder}#{folder_name}"
@@ -152,6 +160,20 @@ def ensure_repo_structure(user_folder: str) -> None:
             )
         else:
             raise
+
+
+def save_dashboard_to_github(
+    slug: str, name: str = "", pw_hash: str | None = None,
+) -> str:
+    """Generate dashboard HTML from GitHub sessions and push index.html."""
+    from .dashboard import generate_dashboard_from_github
+
+    html = generate_dashboard_from_github(slug, name, pw_hash)
+    return save_file_to_github(
+        f"{slug}/index.html",
+        html,
+        f"Update dashboard for {slug}",
+    )
 
 
 def save_session_local(

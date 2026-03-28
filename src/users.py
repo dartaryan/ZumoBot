@@ -1,10 +1,34 @@
 """Per-user configuration management."""
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from .config import USERS_DIR, DEFAULT_SILENCE_MIN_DURATION
+
+
+def _ensure_users_from_env() -> None:
+    """Populate users/ from USERS_CONFIG env var (for containerized deploys).
+
+    USERS_CONFIG is a JSON object: {"username": {config}, ...}
+    Files are written only if they don't already exist.
+    """
+    raw = os.getenv("USERS_CONFIG")
+    if not raw:
+        return
+    try:
+        users = json.loads(raw)
+    except json.JSONDecodeError:
+        return
+    USERS_DIR.mkdir(parents=True, exist_ok=True)
+    for username, data in users.items():
+        path = USERS_DIR / f"{username}.json"
+        if not path.exists():
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+_ensure_users_from_env()
 
 
 @dataclass

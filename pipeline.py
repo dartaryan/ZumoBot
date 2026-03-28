@@ -210,6 +210,8 @@ def process_file(
                 dashboard_url = save_session(
                     user.dashboard_slug, folder_name,
                     transcript_md, analysis_md, summary,
+                    user_name=user.name,
+                    pw_hash=user.web_password_hash,
                 )
                 print(f"  Dashboard: {dashboard_url}")
                 result["dashboard_url"] = dashboard_url
