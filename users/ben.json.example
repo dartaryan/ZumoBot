@@ -1,0 +1,10 @@
+{
+  "name": "Ben Akiva",
+  "telegram_user_id": null,
+  "hebrew_ai_api_key": "your-key-here",
+  "anthropic_api_key": "sk-ant-your-key-here",
+  "default_language": "he",
+  "silence_threshold_seconds": 30,
+  "dashboard_slug": "ben-akiva",
+  "web_password_hash": null
+}

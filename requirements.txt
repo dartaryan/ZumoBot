@@ -1,0 +1,13 @@
+anthropic>=0.49.0
+requests>=2.31
+PyGithub>=2.5.0
+python-dotenv>=1.0.0
+python-slugify>=8.0.0
+yt-dlp>=2024.0.0
+
+# Speaker diarization (optional — heavy, pulls in torch ~2GB)
+# Install order matters:
+#   pip install torch==2.6.0+cpu torchaudio==2.6.0+cpu --index-url https://download.pytorch.org/whl/cpu
+#   pip install "pyannote.audio>=3.1,<4.0" "huggingface_hub<0.24"
+pyannote.audio>=3.1,<4.0
+huggingface_hub>=0.20,<0.24

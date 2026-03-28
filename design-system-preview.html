@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zumo — Design System v3</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #09090B;
+            --bg-surface: rgba(255,255,255, 0.03);
+            --bg-elevated: rgba(255,255,255, 0.06);
+            --bg-hover: rgba(255,255,255, 0.08);
+            --border: rgba(255,255,255, 0.08);
+            --border-strong: rgba(255,255,255, 0.14);
+            --accent-from: #F59E0B;
+            --accent-to: #F97316;
+            --accent-text: #FBBF24;
+            --accent-muted: rgba(251,191,36, 0.12);
+            --text-primary: #FAFAFA;
+            --text-secondary: #A1A1AA;
+            --text-muted: #52525B;
+            --success: #34D399;
+            --warning: #FBBF24;
+            --error: #F87171;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Rubik', -apple-system, system-ui, sans-serif;
+            background: var(--bg-base);
+            color: var(--text-secondary);
+            font-size: 15px;
+            line-height: 1.7;
+            -webkit-font-smoothing: antialiased;
+            overflow-x: hidden;
+        }
+
+        .ambient {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            overflow: hidden;
+        }
+
+        .orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(130px);
+            opacity: 0.06;
+        }
+
+        .orb-1 { width: 600px; height: 600px; background: var(--accent-from); top: -200px; right: -100px; }
+        .orb-2 { width: 500px; height: 500px; background: #7C3AED; bottom: -150px; left: -100px; }
+
+        .container {
+            position: relative;
+            z-index: 1;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        @media (min-width: 640px) { .container { padding: 0 40px; } }
+
+        /* ─── DS Header ─── */
+        .ds-hero {
+            padding: 64px 0 40px;
+            text-align: center;
+        }
+
+        .ds-hero img {
+            width: 140px;
+            height: 140px;
+            margin-bottom: 20px;
+            border-radius: 32px;
+        }
+
+        .ds-hero h1 {
+            font-family: 'DM Serif Display', Georgia, serif;
+            font-size: 52px;
+            font-weight: 400;
+            background: linear-gradient(135deg, var(--accent-from), var(--accent-to), #FBBF24);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            line-height: 1.1;
+            margin-bottom: 8px;
+        }
+
+        .ds-hero p {
+            color: var(--text-muted);
+            font-size: 15px;
+        }
+
+        /* ─── Section ─── */
+        .section { margin-bottom: 64px; }
+
+        .section-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 24px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* ─── Colors ─── */
+        .color-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 10px;
+        }
+
+        .swatch {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            overflow: hidden;
+            transition: border-color 200ms ease;
+            cursor: pointer;
+        }
+
+        .swatch:hover { border-color: var(--border-strong); }
+        .swatch-color { height: 72px; }
+        .swatch-info { padding: 12px 14px; }
+        .swatch-name { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
+        .swatch-hex { font-size: 11px; font-weight: 500; color: var(--text-muted); direction: ltr; text-align: start; }
+
+        /* ─── Typography ─── */
+        .type-row {
+            display: flex;
+            align-items: baseline;
+            gap: 24px;
+            padding: 20px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .type-row:last-child { border-bottom: none; }
+
+        .type-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            min-width: 100px;
+            flex-shrink: 0;
+            direction: ltr;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .t-display { font-family: 'DM Serif Display', Georgia, serif; font-size: 36px; color: var(--text-primary); line-height: 1.15; }
+        .t-h1 { font-size: 28px; font-weight: 700; color: var(--text-primary); line-height: 1.2; }
+        .t-h2 { font-size: 20px; font-weight: 600; color: var(--text-primary); line-height: 1.3; }
+        .t-h3 { font-size: 16px; font-weight: 600; color: var(--text-primary); line-height: 1.4; }
+        .t-body { font-size: 15px; color: var(--text-secondary); line-height: 1.7; }
+        .t-meta { font-size: 13px; font-weight: 500; color: var(--text-muted); line-height: 1.5; }
+
+        /* ─── Password Gate ─── */
+        .gate-demo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        @media (max-width: 640px) { .gate-demo { grid-template-columns: 1fr; } }
+
+        .gate-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 40px 28px;
+            text-align: center;
+            backdrop-filter: blur(20px);
+        }
+
+        .gate-logo-img { width: 80px; height: 80px; border-radius: 22px; margin-bottom: 16px; }
+
+        .gate-wordmark {
+            font-family: 'DM Serif Display', Georgia, serif;
+            font-size: 28px;
+            background: linear-gradient(135deg, var(--accent-from), var(--accent-to));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 4px;
+        }
+
+        .gate-sub { font-size: 13px; color: var(--text-muted); margin-bottom: 28px; }
+
+        .input {
+            width: 100%;
+            background: var(--bg-elevated);
+            border: 2px solid var(--border);
+            border-radius: 14px;
+            padding: 14px 16px;
+            font-size: 15px;
+            font-family: inherit;
+            color: var(--text-primary);
+            text-align: center;
+            outline: none;
+            transition: border-color 200ms ease;
+            direction: ltr;
+        }
+
+        .input::placeholder { color: var(--text-muted); }
+        .input:focus { border-color: var(--accent-text); }
+        .input.has-error { border-color: var(--error); }
+
+        .btn {
+            width: 100%;
+            border: none;
+            border-radius: 14px;
+            padding: 14px;
+            font-size: 15px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 200ms ease;
+            margin-top: 12px;
+        }
+
+        .btn-accent {
+            background: linear-gradient(135deg, var(--accent-from), var(--accent-to));
+            color: #000;
+        }
+
+        .btn-accent:hover { opacity: 0.9; transform: translateY(-1px); }
+
+        .error-text { color: var(--error); font-size: 13px; margin-top: 10px; }
+        .state-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1.5px; text-align: center; margin-bottom: 12px; }
+
+        /* ─── App Header ─── */
+        .app-header {
+            background: rgba(9,9,11, 0.7);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .header-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .header-brand img { width: 44px; height: 44px; border-radius: 12px; }
+
+        .header-brand .wordmark {
+            font-family: 'DM Serif Display', Georgia, serif;
+            font-size: 22px;
+            background: linear-gradient(135deg, var(--accent-from), var(--accent-to));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .pill {
+            background: var(--accent-muted);
+            color: var(--accent-text);
+            font-size: 12px;
+            font-weight: 600;
+            padding: 6px 16px;
+            border-radius: 100px;
+        }
+
+        /* ─── Session Card ─── */
+        .card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            overflow: hidden;
+            transition: all 200ms ease;
+            cursor: pointer;
+            margin-bottom: 10px;
+            position: relative;
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 20px;
+            bottom: 20px;
+            right: 0;
+            width: 4px;
+            background: linear-gradient(180deg, var(--accent-from), var(--accent-to));
+            border-radius: 0 4px 4px 0;
+        }
+
+        .card:hover { background: var(--bg-elevated); border-color: var(--border-strong); }
+
+        .card-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+            padding: 18px 22px;
+        }
+
+        .card-icon-wrap {
+            width: 42px;
+            height: 42px;
+            background: var(--accent-muted);
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .card-icon-wrap svg { width: 20px; height: 20px; color: var(--accent-text); }
+
+        .card-info { flex: 1; min-width: 0; }
+        .card-title { font-size: 15px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+
+        .card-meta {
+            font-size: 13px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .meta-dot { width: 4px; height: 4px; background: var(--text-muted); border-radius: 50%; }
+
+        .card-date {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-muted);
+            font-variant-numeric: tabular-nums;
+            flex-shrink: 0;
+            direction: ltr;
+        }
+
+        .card-chevron {
+            width: 20px;
+            height: 20px;
+            color: var(--text-muted);
+            flex-shrink: 0;
+            transition: transform 200ms ease;
+            margin-top: 4px;
+        }
+
+        .card.open .card-chevron { transform: rotate(180deg); }
+
+        .tabs {
+            display: flex;
+            gap: 6px;
+            padding: 12px 22px;
+            border-top: 1px solid var(--border);
+        }
+
+        .tab {
+            padding: 10px 24px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-muted);
+            cursor: pointer;
+            border-radius: 100px;
+            border: 2px solid transparent;
+            transition: all 200ms ease;
+            background: transparent;
+        }
+
+        .tab:hover { color: var(--text-secondary); background: var(--bg-hover); }
+        .tab.on { color: var(--accent-text); background: var(--accent-muted); border-color: rgba(251,191,36,0.2); }
+
+        .content-area { padding: 18px 22px 22px; }
+
+        .content-inner {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+        }
+
+        .content-inner h3 { font-size: 15px; font-weight: 600; color: var(--text-primary); margin-bottom: 10px; margin-top: 20px; }
+        .content-inner h3:first-child { margin-top: 0; }
+        .content-inner p { margin-bottom: 12px; line-height: 1.7; }
+
+        .content-inner blockquote {
+            border-right: 3px solid var(--accent-from);
+            padding-right: 16px;
+            margin: 16px 0;
+            color: var(--text-primary);
+            font-style: italic;
+        }
+
+        .content-inner table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+
+        .content-inner th {
+            text-align: right;
+            font-weight: 600;
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 10px 12px;
+            border-bottom: 2px solid var(--border-strong);
+        }
+
+        .content-inner td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-secondary);
+        }
+
+        /* ─── Semantic ─── */
+        .pills-row { display: flex; gap: 10px; flex-wrap: wrap; }
+
+        .s-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 18px;
+            border-radius: 100px;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .s-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .s-success { background: rgba(52,211,153,0.1); color: var(--success); }
+        .s-success .s-dot { background: var(--success); }
+        .s-warning { background: rgba(251,191,36,0.1); color: var(--warning); }
+        .s-warning .s-dot { background: var(--warning); }
+        .s-error { background: rgba(248,113,113,0.1); color: var(--error); }
+        .s-error .s-dot { background: var(--error); }
+
+        /* ─── Spacing ─── */
+        .space-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+        .space-label { font-size: 12px; font-weight: 600; color: var(--text-muted); min-width: 32px; direction: ltr; text-align: right; }
+        .space-bar { height: 8px; background: linear-gradient(90deg, var(--accent-from), var(--accent-to)); border-radius: 100px; opacity: 0.5; }
+
+        /* ─── Buttons ─── */
+        .btns-row { display: flex; gap: 10px; flex-wrap: wrap; }
+
+        .demo-btn {
+            background: var(--bg-elevated);
+            border: 2px solid var(--border);
+            border-radius: 14px;
+            padding: 12px 24px;
+            font-size: 14px;
+            font-weight: 600;
+            font-family: inherit;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 200ms ease;
+            outline: none;
+        }
+
+        .demo-btn:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--border-strong); }
+        .demo-btn:focus-visible { box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 5px rgba(245,158,11,0.35); }
+
+        .demo-btn.primary {
+            background: linear-gradient(135deg, var(--accent-from), var(--accent-to));
+            color: #000;
+            border: none;
+        }
+
+        .demo-btn.primary:hover { opacity: 0.9; transform: translateY(-1px); }
+
+        .demo-btn.outline {
+            background: transparent;
+            border-color: var(--accent-from);
+            color: var(--accent-text);
+        }
+
+        .demo-btn.outline:hover { background: var(--accent-muted); }
+
+        /* ─── Brand ─── */
+        .brand-row {
+            display: flex;
+            align-items: center;
+            gap: 40px;
+            flex-wrap: wrap;
+        }
+
+        .brand-lockup {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .brand-lockup img { width: 64px; height: 64px; border-radius: 18px; }
+
+        .brand-gradient {
+            font-family: 'DM Serif Display', Georgia, serif;
+            font-size: 44px;
+            background: linear-gradient(135deg, var(--accent-from), var(--accent-to));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .brand-white {
+            font-family: 'DM Serif Display', Georgia, serif;
+            font-size: 44px;
+            color: var(--text-primary);
+        }
+
+        /* ─── Radius Demo ─── */
+        .radius-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; }
+
+        .radius-box {
+            background: var(--bg-elevated);
+            border: 2px solid var(--border-strong);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .radius-box span { font-size: 11px; font-weight: 600; color: var(--text-muted); }
+
+        /* ─── Divider ─── */
+        .divider { height: 1px; background: var(--border); margin: 48px 0; }
+
+        @media (max-width: 640px) {
+            .ds-hero h1 { font-size: 40px; }
+            .type-row { flex-direction: column; gap: 8px; }
+            .type-label { min-width: auto; }
+            .brand-row { gap: 24px; }
+            .brand-gradient, .brand-white { font-size: 36px; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { transition-duration: 0.01ms !important; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="ambient">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+    </div>
+
+    <div class="container">
+
+        <div class="ds-hero">
+            <img src="logo.png" alt="Zumo">
+            <h1>zumo</h1>
+            <p>Design System v3 — Rubik + Citrus + Rounded</p>
+        </div>
+
+        <!-- ─── COLORS: SURFACES ─── -->
+        <div class="section">
+            <div class="section-title">Surfaces</div>
+            <div class="color-grid">
+                <div class="swatch"><div class="swatch-color" style="background:#09090B;"></div><div class="swatch-info"><div class="swatch-name">Base</div><div class="swatch-hex">#09090B</div></div></div>
+                <div class="swatch"><div class="swatch-color" style="background:rgba(255,255,255,0.03); border-bottom:1px solid rgba(255,255,255,0.06);"></div><div class="swatch-info"><div class="swatch-name">Surface</div><div class="swatch-hex">white 3%</div></div></div>
+                <div class="swatch"><div class="swatch-color" style="background:rgba(255,255,255,0.06); border-bottom:1px solid rgba(255,255,255,0.08);"></div><div class="swatch-info"><div class="swatch-name">Elevated</div><div class="swatch-hex">white 6%</div></div></div>
+                <div class="swatch"><div class="swatch-color" style="background:rgba(255,255,255,0.08); border-bottom:1px solid rgba(255,255,255,0.1);"></div><div class="swatch-info"><div class="swatch-name">Hover</div><div class="swatch-hex">white 8%</div></div></div>
+            </div>
+        </div>
+
+        <!-- ─── COLORS: ACCENT ─── -->
+        <div class="section">
+            <div class="section-title">Accent — Citrus</div>
+            <div class="color-grid">
+                <div class="swatch"><div class="swatch-color" style="background:linear-gradient(135deg,#F59E0B,#F97316);"></div><div class="swatch-info"><div class="swatch-name">Gradient</div><div class="swatch-hex">#F59E0B -> #F97316</div></div></div>
+                <div class="swatch"><div class="swatch-color" style="background:#FBBF24;"></div><div class="swatch-info"><div class="swatch-name">Accent Text</div><div class="swatch-hex">#FBBF24</div></div></div>
+                <div class="swatch"><div class="swatch-color" style="background:rgba(251,191,36,0.12); border-bottom:1px solid rgba(251,191,36,0.2);"></div><div class="swatch-info"><div class="swatch-name">Accent Muted</div><div class="swatch-hex">12% opacity</div></div></div>
+            </div>
+        </div>
+
+        <!-- ─── COLORS: TEXT ─── -->
+        <div class="section">
+            <div class="section-title">Text</div>
+            <div class="color-grid">
+                <div class="swatch"><div class="swatch-color" style="background:#09090B; display:flex; align-items:center; justify-content:center;"><span style="color:#FAFAFA; font-weight:600; font-size:18px;">Aa</span></div><div class="swatch-info"><div class="swatch-name">Primary</div><div class="swatch-hex">#FAFAFA</div></div></div>
+                <div class="swatch"><div class="swatch-color" style="background:#09090B; display:flex; align-items:center; justify-content:center;"><span style="color:#A1A1AA; font-weight:600; font-size:18px;">Aa</span></div><div class="swatch-info"><div class="swatch-name">Secondary</div><div class="swatch-hex">#A1A1AA</div></div></div>
+                <div class="swatch"><div class="swatch-color" style="background:#09090B; display:flex; align-items:center; justify-content:center;"><span style="color:#52525B; font-weight:600; font-size:18px;">Aa</span></div><div class="swatch-info"><div class="swatch-name">Muted</div><div class="swatch-hex">#52525B</div></div></div>
+            </div>
+        </div>
+
+        <!-- ─── SEMANTIC ─── -->
+        <div class="section">
+            <div class="section-title">Semantic</div>
+            <div class="pills-row">
+                <div class="s-pill s-success"><span class="s-dot"></span>ניתוח זמין</div>
+                <div class="s-pill s-warning"><span class="s-dot"></span>בעיבוד</div>
+                <div class="s-pill s-error"><span class="s-dot"></span>שגיאה</div>
+            </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- ─── TYPOGRAPHY ─── -->
+        <div class="section">
+            <div class="section-title">Typography — Rubik + DM Serif Display</div>
+            <div class="type-row">
+                <span class="type-label">Wordmark</span>
+                <span class="t-display">zumo</span>
+            </div>
+            <div class="type-row">
+                <span class="type-label">H1 / 28 Bold</span>
+                <span class="t-h1">התמלולים של בן עקיבא</span>
+            </div>
+            <div class="type-row">
+                <span class="type-label">H2 / 20 Semi</span>
+                <span class="t-h2">ישיבת צוות — סטנדאפ יומי</span>
+            </div>
+            <div class="type-row">
+                <span class="type-label">H3 / 16 Semi</span>
+                <span class="t-h3">פריטי פעולה ומשימות</span>
+            </div>
+            <div class="type-row">
+                <span class="type-label">Body / 15</span>
+                <span class="t-body">הדיון התמקד בתעדוף המשימות לספרינט הקרוב, עם דגש על שיפור ביצועי המערכת והשלמת האינטגרציה עם Hebrew AI.</span>
+            </div>
+            <div class="type-row">
+                <span class="type-label">Meta / 13</span>
+                <span class="t-meta">27.03.2026  ·  01:23:45  ·  Ben, Shai, Omri</span>
+            </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- ─── BORDER RADIUS ─── -->
+        <div class="section">
+            <div class="section-title">Border Radius Scale</div>
+            <div class="radius-row">
+                <div class="radius-box" style="width:60px; height:60px; border-radius:12px;"><span>12</span></div>
+                <div class="radius-box" style="width:70px; height:70px; border-radius:14px;"><span>14</span></div>
+                <div class="radius-box" style="width:80px; height:80px; border-radius:16px;"><span>16</span></div>
+                <div class="radius-box" style="width:90px; height:90px; border-radius:20px;"><span>20</span></div>
+                <div class="radius-box" style="width:100px; height:100px; border-radius:24px;"><span>24</span></div>
+                <div class="radius-box" style="width:50px; height:36px; border-radius:100px;"><span>pill</span></div>
+            </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- ─── PASSWORD GATE ─── -->
+        <div class="section">
+            <div class="section-title">Password Gate</div>
+            <div class="gate-demo">
+                <div>
+                    <div class="state-label">Default</div>
+                    <div class="gate-card">
+                        <img class="gate-logo-img" src="logo.png" alt="Zumo">
+                        <div class="gate-wordmark">zumo</div>
+                        <div class="gate-sub">הזן סיסמה כדי לגשת לתמלולים</div>
+                        <input type="password" class="input" placeholder="Passcode">
+                        <button class="btn btn-accent">כניסה</button>
+                    </div>
+                </div>
+                <div>
+                    <div class="state-label">Error</div>
+                    <div class="gate-card">
+                        <img class="gate-logo-img" src="logo.png" alt="Zumo">
+                        <div class="gate-wordmark">zumo</div>
+                        <div class="gate-sub">הזן סיסמה כדי לגשת לתמלולים</div>
+                        <input type="password" class="input has-error" value="wrong">
+                        <button class="btn btn-accent">כניסה</button>
+                        <div class="error-text">סיסמה שגויה</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- ─── APP HEADER ─── -->
+        <div class="section">
+            <div class="section-title">App Header</div>
+            <div class="app-header">
+                <div class="header-brand">
+                    <img src="logo.png" alt="Zumo">
+                    <span class="wordmark">zumo</span>
+                </div>
+                <span class="pill">12 תמלולים</span>
+            </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- ─── SESSION CARDS ─── -->
+        <div class="section">
+            <div class="section-title">Session Cards</div>
+
+            <div class="card">
+                <div class="card-row">
+                    <div class="card-icon-wrap">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                    </div>
+                    <div class="card-info">
+                        <div class="card-title">ישיבת צוות — סטנדאפ יומי</div>
+                        <div class="card-meta"><span>Ben, Shai, Omri</span><span class="meta-dot"></span><span>01:23:45</span></div>
+                    </div>
+                    <span class="card-date">27.03</span>
+                    <svg class="card-chevron" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-row">
+                    <div class="card-icon-wrap">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>
+                    </div>
+                    <div class="card-info">
+                        <div class="card-title">Claude VIP — סדנת Claude</div>
+                        <div class="card-meta"><span>Ben, Omri, Adi</span><span class="meta-dot"></span><span>02:38:00</span></div>
+                    </div>
+                    <span class="card-date">24.03</span>
+                    <svg class="card-chevron" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                </div>
+            </div>
+
+            <!-- Expanded -->
+            <div class="card open">
+                <div class="card-row">
+                    <div class="card-icon-wrap">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg>
+                    </div>
+                    <div class="card-info">
+                        <div class="card-title">סשן אימון — גל וניר</div>
+                        <div class="card-meta"><span>Ben, Gal, Nir</span><span class="meta-dot"></span><span>00:47:20</span></div>
+                    </div>
+                    <span class="card-date">20.03</span>
+                    <svg class="card-chevron" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                </div>
+
+                <div class="tabs">
+                    <div class="tab on">תמלול</div>
+                    <div class="tab">ניתוח</div>
+                </div>
+
+                <div class="content-area">
+                    <div class="content-inner">
+                        <h3>סיכום הפגישה</h3>
+                        <p>הסשן התמקד בהגדרת יעדים אישיים לרבעון הקרוב ובניתוח התקדמות מהרבעון הקודם. גל הציג את המודל החדש לעבודה עם לקוחות, וניר שיתף תובנות מהשטח.</p>
+
+                        <h3>פריטי פעולה</h3>
+                        <table>
+                            <thead><tr><th>משימה</th><th>אחראי</th><th>דדליין</th></tr></thead>
+                            <tbody>
+                                <tr><td>להכין מצגת ללקוח</td><td>גל</td><td>30.03</td></tr>
+                                <tr><td>לסגור חוזה מול ספק</td><td>ניר</td><td>02.04</td></tr>
+                            </tbody>
+                        </table>
+
+                        <h3>ציטוטים מרכזיים</h3>
+                        <blockquote>"אנחנו צריכים לחשוב על הערך שאנחנו מביאים, לא על הכמות" — גל</blockquote>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- ─── SPACING ─── -->
+        <div class="section">
+            <div class="section-title">Spacing</div>
+            <div class="space-row"><span class="space-label">4</span><div class="space-bar" style="width:4px;"></div></div>
+            <div class="space-row"><span class="space-label">8</span><div class="space-bar" style="width:8px;"></div></div>
+            <div class="space-row"><span class="space-label">12</span><div class="space-bar" style="width:12px;"></div></div>
+            <div class="space-row"><span class="space-label">16</span><div class="space-bar" style="width:16px;"></div></div>
+            <div class="space-row"><span class="space-label">24</span><div class="space-bar" style="width:24px;"></div></div>
+            <div class="space-row"><span class="space-label">32</span><div class="space-bar" style="width:32px;"></div></div>
+            <div class="space-row"><span class="space-label">48</span><div class="space-bar" style="width:48px;"></div></div>
+            <div class="space-row"><span class="space-label">64</span><div class="space-bar" style="width:64px;"></div></div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- ─── BUTTONS ─── -->
+        <div class="section">
+            <div class="section-title">Buttons</div>
+            <div class="btns-row">
+                <button class="demo-btn primary">לחצן ראשי</button>
+                <button class="demo-btn outline">לחצן משני</button>
+                <button class="demo-btn">לחצן רגיל</button>
+            </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- ─── BRAND ─── -->
+        <div class="section">
+            <div class="section-title">Brand Lockup</div>
+            <div class="brand-row">
+                <div class="brand-lockup">
+                    <img src="logo.png" alt="Zumo">
+                    <span class="brand-gradient">zumo</span>
+                </div>
+                <span class="brand-white">zumo</span>
+            </div>
+        </div>
+
+        <div style="height: 80px;"></div>
+    </div>
+</body>
+</html>

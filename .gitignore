@@ -1,0 +1,9 @@
+.env
+users/*.json
+!users/ben.json.example
+output/
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+.work/
