@@ -1,4 +1,4 @@
-# Zumo — Handoff for Next Agent
+# Zumo -- Handoff for Next Agent
 
 > Written: 2026-03-28
 > Author: Claude Opus (session with Ben Akiva)
@@ -8,122 +8,172 @@
 
 ## What Changed This Session
 
-### Zumo Bot Agent Prompt Integration — DONE (Priority 2)
+### Telegram Bot -- DONE (Priority 4)
 
-Replaced the hardcoded system prompt in `analyze_transcript()` with the full `zumo-bot-agent.md` agent prompt.
+Built `bot.py` using `python-telegram-bot`, following the same pattern as `tiktok-pipeline/bot.py`.
 
-#### What Changed in `src/processor.py`
+#### What Was Added
 
-| Before | After |
-|--------|-------|
-| Hardcoded ~20-line system prompt with generic 7-section structure | Full `zumo-bot-agent.md` (~590 lines) loaded as system prompt |
-| User message: `"Analyze this transcript:\n\n{text}"` | User message in agent's expected input format (see below) |
-| `max_tokens=4096` | `max_tokens=16384` (agent produces comprehensive output) |
-| Imported `SESSION_TYPES` from config | No longer needed — agent handles type routing internally |
+| File | Change |
+|------|--------|
+| `bot.py` | New -- Telegram bot, 3 handlers (start, file, zoom URL) |
+| `src/users.py` | Added `find_user_by_telegram_id()` -- scans all user JSONs |
+| `requirements.txt` | Added `python-telegram-bot>=21.0` |
+| `.env.example` | Added `TELEGRAM_BOT_TOKEN` |
 
-#### Agent Input Format
+#### How It Works
 
-The user message now matches the format `zumo-bot-agent.md` expects:
+1. User sends audio/video file (or voice/video note) to the bot via Telegram
+2. Bot looks up `telegram_user_id` across all `users/*.json` files to authenticate
+3. Bot downloads the file to a temp directory
+4. Bot calls `process_file()` from `pipeline.py` in a thread executor (non-blocking)
+5. Pipeline runs the full 8 steps (extract, silence removal, diarize, transcribe, analyze, save)
+6. Bot replies with duration, transcript length, and dashboard URL
+7. Temp files cleaned up
 
-```
-Session Type: {session_type}
-Speakers: {speakers or "Not specified"}
-Language: {language}
-User Requests: full analysis
+#### Auth Model
 
---- TRANSCRIPT ---
-{transcript text, capped at 100k chars}
-```
+No env-var allowlist. Auth is purely by `telegram_user_id` field in `users/*.json`. If a user's Telegram ID isn't in any user config, they get "Access denied" with their ID shown (so you can add them).
 
-#### How the Agent Prompt is Loaded
+`find_user_by_telegram_id(telegram_id)` returns `(username, UserConfig)` or `None`.
 
-```python
-_AGENT_PROMPT_PATH = Path(__file__).parent.parent / "zumo-bot-agent.md"
-_AGENT_PROMPT = _AGENT_PROMPT_PATH.read_text(encoding="utf-8")
-```
+#### Caption Metadata
 
-Read once at module import time. The file must exist at the project root — if it's moved or renamed, `processor.py` will fail on import.
-
-#### What the Agent Does Differently
-
-The old hardcoded prompt produced a flat 7-section summary. The Zumo Bot agent:
-
-1. **Routes by session type** — team-meeting, training, client-call, phone-call, coaching, other. Each type has its own extraction strategy and output template.
-2. **Restructures, doesn't summarize** — extracts ALL meaningful content into organized chapters by topic. Nothing important gets dropped.
-3. **Bilingual output** — section headers are `## מבט כללי / Overview` format in Hebrew mode.
-4. **Quality rules** — exact quotes only (no paraphrasing), speaker attribution mandatory, no empty sections, uncertainty marked as `[לא ברור]`/`[unclear]`.
-5. **No emojis** — clean markdown output.
-
-#### `session_type` values passed to the agent
-
-The `--session-type` CLI flag values are passed directly: `team-meeting`, `training`, `client-call`, `phone-call`, `coaching`, `other`. The agent prompt maps these to its extraction strategies internally.
-
-#### Pipeline Flow (Unchanged)
+Users can set session metadata in the file's caption:
 
 ```
-[1/8] Extract audio
-[2/8] Silence removal
-[3/8] Speaker diarization
-[3.5/8] Compress if >25MB
-[4/8] Transcription (Hebrew AI)
-[5/8] Align speakers with transcript
-[6/8] Summary (Claude Haiku) — unchanged, still one-line Hebrew
-[7/8] Analysis (Claude Sonnet) — NOW uses zumo-bot-agent.md
-[8/8] Save
+type:training speakers:Ben,Omri lang:he
 ```
+
+All optional. Defaults: `type:other`, no speakers, language from user config.
+
+#### Zoom URL Support
+
+Text messages containing Zoom recording links (`zoom.us/rec/share/...` or `zoom.us/rec/play/...`) are detected and processed. Passcode extracted from `?pwd=` query param if present. Default session type: `team-meeting`.
+
+#### Handlers
+
+| Handler | Trigger | Purpose |
+|---------|---------|---------|
+| `/start` | Command | Shows help text with session types |
+| File handler | Audio, video, voice, video note, document | Downloads + runs pipeline |
+| Text handler | Non-command text | Checks for Zoom URLs |
+
+#### Status Messages
+
+No emojis (Ben's rules). Uses bracket markers:
+- `[>]` -- in progress
+- `[=]` -- done
+- `[x]` -- error
 
 #### Not Tested End-to-End
 
-This change was not tested with a real recording run. The syntax is verified. To test:
+Syntax verified. The bot requires `TELEGRAM_BOT_TOKEN` in `.env` and valid GitHub credentials. To test:
 
 ```bash
-python pipeline.py recording.mp4 --user ben-akiva --session-type training --speakers "Ben, Omri" --local
+# Add bot token to .env
+echo "TELEGRAM_BOT_TOKEN=your_token" >> .env
+
+# Run the bot
+python bot.py
 ```
 
-Check that the analysis output in the saved markdown file follows the agent's structured format (type-specific template, bilingual headers, no emojis, comprehensive extraction).
+Then send an audio file to the bot on Telegram.
+
+#### Known Limitations
+
+- Telegram file size limit is 20MB for downloads via Bot API. For larger files, users need to use the CLI pipeline or send a Zoom link.
+- `process_file()` prints progress to stdout (server console), not to the Telegram chat. The user sees download -> processing -> done. No step-by-step progress.
+- `Document.ALL` filter catches all documents; non-media extensions are rejected inside the handler.
 
 ---
 
-## Previous Session: Speaker Diarization — DONE (Priority 1)
+### Previous: Agent Prompt Integration -- DONE (Priority 2)
 
-Full details in git history (commit `eefdf03`). Key points:
+See git history. Replaced hardcoded analysis prompt with `zumo-bot-agent.md`.
 
-- `src/diarizer.py` — pyannote-audio speaker diarization + proportional sentence alignment
-- Pipeline steps 3 and 5 handle diarization and alignment
-- Fully optional — graceful fallback if pyannote not installed
-- Version matrix is fragile (see git history for details): torch 2.6.0+cpu, pyannote.audio >=3.1 <4.0, huggingface_hub <0.24
-- Tested end-to-end on 38-minute Zoom recording
+### Previous: Speaker Diarization -- DONE (Priority 1)
+
+See git history (commit `eefdf03`).
+
+### Previous: Dashboard HTML Generator -- DONE (Priority 3)
+
+See git history (commit `13e139b`).
 
 ---
 
 ## What's NOT Done Yet
 
-### Priority 3: Build the Real Dashboard HTML
-
-A single HTML page per user, generated by the pipeline, served on Netlify. Based on `DESIGN-SYSTEM.md` and `design-system-preview.html`. See original handoff for full spec (password gate, session cards, RTL, responsive, static).
-
-### Priority 4: Telegram Bot
-
-`bot.py` using `python-telegram-bot`. Same pattern as `c:\Users\darta\Desktop\פרויקטים\tiktok-pipeline\bot.py`. See original handoff for full spec.
-
 ### Priority 5: Deployment
 
-Railway (bot) + Netlify (dashboard). See original handoff.
+Deploy the bot and dashboard to production.
+
+#### Bot Deployment (Railway)
+
+1. Create a Railway project with the zumo repo
+2. Set environment variables in Railway dashboard:
+   - `TELEGRAM_BOT_TOKEN` -- from @BotFather on Telegram
+   - `GITHUB_TOKEN` -- PAT with repo + contents write access
+   - `GITHUB_REPO` -- `owner/zumo-data` format
+   - `GITHUB_BRANCH` -- `main`
+   - `HUGGINGFACE_TOKEN` -- for speaker diarization (optional, heavy)
+3. Start command: `python bot.py`
+4. No port needed -- bot uses polling, not webhook
+5. Railway plan: Starter ($5/mo) should be enough for 5 users
+
+#### Diarization on Railway
+
+pyannote.audio pulls in torch (~2GB). Railway's free tier has 512MB RAM. Options:
+- **Option A**: Skip diarization on Railway (bot runs with `skip_diarization=True`). Simplest.
+- **Option B**: Use a larger Railway plan with 2GB+ RAM. Install torch CPU-only to save space.
+- **Option C**: Run diarization as a separate service (overkill for 5 users).
+
+Recommendation: Option A for now. Diarization is nice-to-have, not critical.
+
+#### Dashboard Deployment (Netlify)
+
+1. The pipeline saves sessions to a GitHub repo (`GITHUB_REPO`)
+2. `src/dashboard.py` generates a self-contained `index.html` per user
+3. Two approaches:
+   - **Static**: Run `python pipeline.py --user X --dashboard` to regenerate HTML, commit to a `gh-pages` branch or separate repo, deploy via Netlify
+   - **GitHub Pages**: Enable GitHub Pages on the data repo directly (simpler)
+4. Set `DASHBOARD_BASE_URL` in `.env` to the deployed URL (e.g., `https://zumo.netlify.app`)
+5. The bot will then return clickable dashboard links with session anchors
+
+#### Netlify Config (if using Netlify)
+
+```toml
+# netlify.toml
+[build]
+  publish = "output/"
+  command = "echo 'static site'"
+```
+
+Or use `_redirects` for pretty URLs.
+
+#### Domain
+
+No custom domain yet. Use `zumo-XXXX.netlify.app` or `owner.github.io/zumo-data` for now.
 
 ### Priority 6: Onboarding Guide
 
-Markdown doc for new users. See original handoff.
+Markdown doc for new users. Should cover:
+- How to get a Telegram bot token from @BotFather
+- How to create a `users/username.json` with their API keys
+- How to find their Telegram user ID (forward a message to @userinfobot)
+- How to use the bot (send files, captions, Zoom links)
+- How to use the CLI pipeline for large files
 
 ---
 
 ## Key Files to Read First
 
-1. `zumo-bot-agent.md` — The agent prompt (system prompt for analysis step)
-2. `src/processor.py` — Loads agent prompt, sends transcript in expected format
-3. `pipeline.py` — Full 8-step pipeline flow
-4. `src/diarizer.py` — Speaker diarization + alignment logic
-5. `DESIGN-SYSTEM.md` — For dashboard build (Priority 3)
-6. `design-system-preview.html` — Visual reference
+1. `bot.py` -- Telegram bot (Priority 4, just built)
+2. `pipeline.py` -- Full 8-step pipeline flow, `process_file()` function
+3. `src/users.py` -- User loading + `find_user_by_telegram_id()`
+4. `src/config.py` -- Env vars, session types, model config
+5. `zumo-bot-agent.md` -- System prompt for analysis step
+6. `src/dashboard.py` -- HTML dashboard generation
 
 ---
 
@@ -133,4 +183,4 @@ Markdown doc for new users. See original handoff.
 - Hebrew for content, English for code/technical.
 - Don't over-engineer. 5 users max. Keep it simple.
 - Dark mode only. Rubik font. Very rounded. Thick strokes.
-- He builds cathedrals when houses would do — nudge him to ship.
+- He builds cathedrals when houses would do -- nudge him to ship.

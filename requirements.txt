@@ -3,6 +3,7 @@ requests>=2.31
 PyGithub>=2.5.0
 python-dotenv>=1.0.0
 python-slugify>=8.0.0
+python-telegram-bot>=21.0
 yt-dlp>=2024.0.0
 
 # Speaker diarization (optional — heavy, pulls in torch ~2GB)

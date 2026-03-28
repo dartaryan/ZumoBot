@@ -59,3 +59,15 @@ def list_users() -> list[str]:
         f.stem for f in USERS_DIR.glob("*.json")
         if f.suffix == ".json" and not f.name.endswith(".example")
     ]
+
+
+def find_user_by_telegram_id(telegram_id: int) -> tuple[str, UserConfig] | None:
+    """Find a user by their Telegram user ID. Returns (username, config) or None."""
+    for username in list_users():
+        try:
+            user = load_user(username)
+            if user.telegram_user_id == telegram_id:
+                return (username, user)
+        except (FileNotFoundError, ValueError):
+            continue
+    return None
