@@ -223,25 +223,36 @@ async def handle_zoom_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             tmp_dir = Path(tempfile.mkdtemp(prefix="zumo-zoom-"))
 
-            # Extract passcode from URL query param or message text
+            # Extract passcode from URL query param or message text (for yt-dlp fallback)
             passcode = None
             m = re.search(r"[?&]pwd=(\w+)", url)
             if m:
                 passcode = m.group(1)
             else:
-                # Look for "Passcode: XYZ" in the message text
                 m = re.search(r"[Pp]asscode[:\s]+(\S+)", text)
                 if m:
                     passcode = m.group(1)
 
-            file_path = download_zoom_recording(url, tmp_dir, passcode)
+            loop = asyncio.get_event_loop()
+
+            # Download via Zoom API (returns dict of file paths)
+            zoom_files = await loop.run_in_executor(
+                None,
+                lambda: download_zoom_recording(url, tmp_dir, passcode),
+            )
+
+            # Use audio file for transcription, fall back to video
+            file_path = zoom_files.get("audio") or zoom_files.get("video")
+            if not file_path:
+                raise RuntimeError("No audio/video file downloaded from Zoom")
+
+            vtt_path = zoom_files.get("transcript")
 
             await status_msg.edit_text(
                 "[>] Processing Zoom recording...\n"
                 "    This may take several minutes..."
             )
 
-            loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
                 None,
                 lambda: process_file(
@@ -253,6 +264,7 @@ async def handle_zoom_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     local_mode=False,
                     skip_analysis=False,
                     skip_diarization=False,
+                    zoom_vtt_path=vtt_path,
                 ),
             )
 

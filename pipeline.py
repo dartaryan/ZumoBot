@@ -58,6 +58,7 @@ def process_file(
     local_mode: bool,
     skip_analysis: bool,
     skip_diarization: bool = False,
+    zoom_vtt_path: Path | None = None,
 ) -> dict:
     """Main pipeline: audio -> transcribe -> analyze -> save."""
 
@@ -149,7 +150,15 @@ def process_file(
             print(f"  Transcription complete ({len(text)} characters).")
 
             # --- Step 5: Align speakers with transcript ---
-            if diarization_segments:
+            if zoom_vtt_path and zoom_vtt_path.exists():
+                print(f"\n[5/8] Aligning speakers from Zoom VTT: {zoom_vtt_path.name}")
+                try:
+                    from src.vtt_align import align_with_zoom_vtt
+                    text = align_with_zoom_vtt(text, zoom_vtt_path)
+                    print(f"  Speaker-aligned transcript: {len(text)} characters.")
+                except Exception as e:
+                    print(f"  VTT alignment failed, using raw transcript: {e}")
+            elif diarization_segments:
                 print("\n[5/8] Aligning speakers with transcript...")
                 text = align_transcript(
                     text,

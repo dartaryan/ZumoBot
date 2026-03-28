@@ -40,6 +40,11 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GITHUB_REPO = os.getenv("GITHUB_REPO", "")
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
 
+# --- Zoom API ---
+ZOOM_ACCOUNT_ID = os.getenv("ZOOM_ACCOUNT_ID", "")
+ZOOM_CLIENT_ID = os.getenv("ZOOM_CLIENT_ID", "")
+ZOOM_CLIENT_SECRET = os.getenv("ZOOM_CLIENT_SECRET", "")
+
 # --- Dashboard ---
 DASHBOARD_BASE_URL = os.getenv("DASHBOARD_BASE_URL", "")
 
