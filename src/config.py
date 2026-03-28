@@ -30,7 +30,7 @@ POLL_TIMEOUT = 1800  # 30 minutes max wait
 
 # --- Claude Models ---
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
-SONNET_MODEL = "claude-sonnet-4-5-20241022"
+SONNET_MODEL = "claude-sonnet-4-6"
 
 # --- Speaker Diarization (pyannote) ---
 HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN", "")
