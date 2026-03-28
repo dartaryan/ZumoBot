@@ -104,12 +104,9 @@ def load_user(username: str) -> UserConfig:
     except json.JSONDecodeError as e:
         raise ValueError(f"Invalid JSON in {filepath}: {e}") from e
 
-    if not data.get("hebrew_ai_api_key"):
-        raise ValueError(f"Missing required field 'hebrew_ai_api_key' in {filepath}")
-
     return UserConfig(
         name=data["name"],
-        hebrew_ai_api_key=data["hebrew_ai_api_key"],
+        hebrew_ai_api_key=data.get("hebrew_ai_api_key", ""),
         anthropic_api_key=data.get("anthropic_api_key", ""),
         default_language=data.get("default_language", "he"),
         silence_threshold_seconds=data.get("silence_threshold_seconds", DEFAULT_SILENCE_MIN_DURATION),
@@ -129,13 +126,44 @@ def list_users() -> list[str]:
     ]
 
 
+def diagnose_telegram_id(telegram_id: int) -> str | None:
+    """Check why a Telegram ID might fail to authenticate.
+    Returns an error message string, or None if the user loads fine."""
+    users = list_users()
+    if not users:
+        return "No users configured on this server."
+    for username in users:
+        filepath = USERS_DIR / f"{username}.json"
+        try:
+            data = json.loads(filepath.read_text(encoding="utf-8"))
+            if isinstance(data, str):
+                data = json.loads(data)
+        except (json.JSONDecodeError, FileNotFoundError):
+            continue
+        if data.get("telegram_user_id") == telegram_id:
+            # Found the user entry -- check what's broken
+            missing = []
+            if not data.get("hebrew_ai_api_key"):
+                missing.append("hebrew_ai_api_key")
+            if not data.get("anthropic_api_key"):
+                missing.append("anthropic_api_key")
+            if missing:
+                return f"User '{username}' found but missing config: {', '.join(missing)}. Check server env vars."
+            return None  # All good
+    return None  # Not found at all -- will get the generic "not registered" message
+
+
 def find_user_by_telegram_id(telegram_id: int) -> tuple[str, UserConfig] | None:
     """Find a user by their Telegram user ID. Returns (username, config) or None."""
+    import sys
     for username in list_users():
         try:
             user = load_user(username)
             if user.telegram_user_id == telegram_id:
                 return (username, user)
-        except (FileNotFoundError, ValueError):
+        except FileNotFoundError:
+            continue
+        except ValueError as e:
+            print(f"[AUTH] User '{username}' config error: {e}", file=sys.stderr)
             continue
     return None

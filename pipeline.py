@@ -137,6 +137,8 @@ def process_file(
                 upload_path = trimmed_path
 
             # --- Step 4: Transcription ---
+            if not user.hebrew_ai_api_key:
+                raise ValueError("hebrew_ai_api_key is not configured. Check ZUMO_USER_HEBREW_AI_KEY env var.")
             print(f"\n[4/8] Transcribing via Hebrew AI ({language})...")
             text, api_duration = transcribe(
                 upload_path,

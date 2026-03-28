@@ -19,7 +19,7 @@ from telegram.ext import (
 )
 
 from src.config import SESSION_TYPES, validate_config
-from src.users import find_user_by_telegram_id
+from src.users import find_user_by_telegram_id, diagnose_telegram_id
 from src.audio import format_duration
 
 load_dotenv()
@@ -91,10 +91,14 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_info = find_user_by_telegram_id(telegram_id)
 
     if not user_info:
-        await update.message.reply_text(
-            f"Access denied. Your Telegram ID is not registered.\n"
-            f"Your ID: {telegram_id}"
-        )
+        diag = diagnose_telegram_id(telegram_id)
+        if diag:
+            await update.message.reply_text(f"[!] {diag}")
+        else:
+            await update.message.reply_text(
+                f"Access denied. Your Telegram ID is not registered.\n"
+                f"Your ID: {telegram_id}"
+            )
         return
 
     _username, user = user_info
@@ -191,10 +195,14 @@ async def handle_zoom_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_info = find_user_by_telegram_id(telegram_id)
 
     if not user_info:
-        await update.message.reply_text(
-            f"Access denied. Your Telegram ID is not registered.\n"
-            f"Your ID: {telegram_id}"
-        )
+        diag = diagnose_telegram_id(telegram_id)
+        if diag:
+            await update.message.reply_text(f"[!] {diag}")
+        else:
+            await update.message.reply_text(
+                f"Access denied. Your Telegram ID is not registered.\n"
+                f"Your ID: {telegram_id}"
+            )
         return
 
     text = update.message.text or ""
