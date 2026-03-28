@@ -1,8 +1,14 @@
 """Claude API for transcript analysis."""
 
+from pathlib import Path
+
 from anthropic import Anthropic
 
-from .config import HAIKU_MODEL, SONNET_MODEL, SESSION_TYPES
+from .config import HAIKU_MODEL, SONNET_MODEL
+
+# Load the Zumo Bot agent prompt once at import time
+_AGENT_PROMPT_PATH = Path(__file__).parent.parent / "zumo-bot-agent.md"
+_AGENT_PROMPT = _AGENT_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 def generate_summary(
@@ -38,48 +44,33 @@ def analyze_transcript(
     language: str = "he",
     model: str = SONNET_MODEL,
 ) -> str:
-    """Full structured analysis using Claude Sonnet.
+    """Full structured analysis using the Zumo Bot agent prompt.
 
-    Phase 1: Basic system prompt. Phase 2 will use zumo-bot-agent.md from Seeker.
+    Uses zumo-bot-agent.md as the system prompt. The agent expects a specific
+    input format with metadata header + transcript body.
     Returns empty string if no api_key.
     """
     if not api_key:
         return ""
 
-    type_info = SESSION_TYPES.get(session_type, SESSION_TYPES["other"])
-    type_label = type_info["he"] if language == "he" else type_info["en"]
-    lang_instruction = "כתוב את כל הפלט בעברית." if language == "he" else "Write all output in English."
-
-    system_prompt = f"""You are Zumo, a transcript analysis agent. You receive a transcript and produce a structured markdown document.
-
-Session type: {type_label}
-Speakers: {speakers or "Not specified"}
-
-{lang_instruction}
-
-Output the following sections in markdown:
-1. **Title** — A short descriptive title for this session
-2. **Participants** — List of speakers and their roles (if identifiable)
-3. **Summary** — 3-5 sentence summary of the session
-4. **Key Topics** — Numbered list of main topics discussed
-5. **Action Items** — Table with columns: Task | Owner | Deadline (use "—" if unknown)
-6. **Key Quotes** — Important quotes with speaker attribution (use blockquotes)
-7. **Open Questions** — Any unresolved questions or items needing follow-up
-
-Quality rules:
-- Every claim must come from the transcript. Never fabricate.
-- If something is unclear, mark it: "[unclear]" or "[לא ברור]"
-- Quotes must be exact, not paraphrased.
-- Action items without clear owners get "[not specified]" / "[לא צוין]"."""
+    user_message = (
+        f"Session Type: {session_type}\n"
+        f"Speakers: {speakers or 'Not specified'}\n"
+        f"Language: {language}\n"
+        f"User Requests: full analysis\n"
+        f"\n"
+        f"--- TRANSCRIPT ---\n"
+        f"{transcript_text[:100000]}"
+    )
 
     client = Anthropic(api_key=api_key)
     response = client.messages.create(
         model=model,
-        max_tokens=4096,
-        system=system_prompt,
+        max_tokens=16384,
+        system=_AGENT_PROMPT,
         messages=[{
             "role": "user",
-            "content": f"Analyze this transcript:\n\n{transcript_text[:100000]}",
+            "content": user_message,
         }],
     )
     return response.content[0].text
