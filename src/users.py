@@ -9,23 +9,43 @@ from .config import USERS_DIR, DEFAULT_SILENCE_MIN_DURATION
 
 
 def _ensure_users_from_env() -> None:
-    """Populate users/ from USERS_CONFIG env var (for containerized deploys).
+    """Populate users/ from env vars (for containerized deploys).
 
-    USERS_CONFIG is a JSON object: {"username": {config}, ...}
+    Supports two modes:
+    1. Individual env vars (recommended): ZUMO_USER_SLUG + ZUMO_USER_*
+    2. Single JSON: USERS_CONFIG={"username": {config}, ...}
     """
     import sys
+
+    # Mode 1: Individual env vars (simple, no JSON issues)
+    slug = os.getenv("ZUMO_USER_SLUG")
+    if slug:
+        data = {
+            "name": os.getenv("ZUMO_USER_NAME", slug),
+            "telegram_user_id": int(os.getenv("ZUMO_USER_TELEGRAM_ID", "0")) or None,
+            "hebrew_ai_api_key": os.getenv("ZUMO_USER_HEBREW_AI_KEY", ""),
+            "anthropic_api_key": os.getenv("ZUMO_USER_ANTHROPIC_KEY", ""),
+            "default_language": os.getenv("ZUMO_USER_LANGUAGE", "he"),
+            "silence_threshold_seconds": int(os.getenv("ZUMO_USER_SILENCE_THRESHOLD", "30")),
+            "dashboard_slug": slug,
+            "web_password_hash": os.getenv("ZUMO_USER_PASSWORD_HASH") or None,
+        }
+        USERS_DIR.mkdir(parents=True, exist_ok=True)
+        path = USERS_DIR / f"{slug}.json"
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[BOOT] Wrote user from env vars: {slug}", file=sys.stderr)
+        return
+
+    # Mode 2: USERS_CONFIG JSON (fallback)
     raw = os.getenv("USERS_CONFIG")
     if not raw:
         return
-    print(f"[USERS_CONFIG] Raw (first 120): {raw[:120]!r}", file=sys.stderr)
     try:
         users = json.loads(raw)
     except json.JSONDecodeError as e:
         print(f"[USERS_CONFIG] JSON parse failed: {e}", file=sys.stderr)
         return
-    print(f"[USERS_CONFIG] Parsed type={type(users).__name__}, keys={list(users.keys()) if isinstance(users, dict) else 'N/A'}", file=sys.stderr)
     if not isinstance(users, dict):
-        print(f"[USERS_CONFIG] Expected dict, got {type(users).__name__}", file=sys.stderr)
         return
     USERS_DIR.mkdir(parents=True, exist_ok=True)
     for username, data in users.items():
@@ -33,14 +53,12 @@ def _ensure_users_from_env() -> None:
             try:
                 data = json.loads(data)
             except (json.JSONDecodeError, ValueError):
-                print(f"[USERS_CONFIG] Skipping {username}: value is not valid JSON", file=sys.stderr)
                 continue
         if not isinstance(data, dict):
-            print(f"[USERS_CONFIG] Skipping {username}: expected dict, got {type(data).__name__}", file=sys.stderr)
             continue
         path = USERS_DIR / f"{username}.json"
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"[USERS_CONFIG] Wrote {path.name}", file=sys.stderr)
+        print(f"[BOOT] Wrote user from USERS_CONFIG: {username}", file=sys.stderr)
 
 
 _ensure_users_from_env()
