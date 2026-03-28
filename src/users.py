@@ -17,6 +17,10 @@ def _ensure_users_from_env() -> None:
     """
     import sys
 
+    # Debug: show all ZUMO env vars
+    zumo_vars = {k: v[:20] + "..." if len(v) > 20 else v for k, v in os.environ.items() if k.startswith("ZUMO")}
+    print(f"[BOOT] ZUMO env vars: {zumo_vars}", file=sys.stderr)
+
     # Mode 1: Individual env vars (simple, no JSON issues)
     slug = os.getenv("ZUMO_USER_SLUG")
     if slug:
