@@ -293,13 +293,18 @@ def main():
     ))
 
     # Debug: show loaded users
+    import sys
     from src.users import list_users, load_user
-    for uname in list_users():
+    users_found = list_users()
+    print(f"[BOOT] USERS_CONFIG set: {bool(os.getenv('USERS_CONFIG'))}", file=sys.stderr)
+    print(f"[BOOT] USERS_DIR: {os.path.exists('users/')}, files: {list(Path('users/').glob('*.json')) if Path('users/').exists() else 'N/A'}", file=sys.stderr)
+    print(f"[BOOT] list_users() = {users_found}", file=sys.stderr)
+    for uname in users_found:
         try:
             u = load_user(uname)
-            logger.info(f"Loaded user: {uname} | telegram_id={u.telegram_user_id} (type={type(u.telegram_user_id).__name__})")
+            print(f"[BOOT] User {uname}: telegram_id={u.telegram_user_id} (type={type(u.telegram_user_id).__name__})", file=sys.stderr)
         except Exception as e:
-            logger.error(f"Failed to load user {uname}: {e}")
+            print(f"[BOOT] FAILED {uname}: {e}", file=sys.stderr)
 
     logger.info("Zumo bot is running...")
     app.run_polling(drop_pending_updates=True)
