@@ -37,9 +37,8 @@ def _ensure_users_from_env() -> None:
             print(f"[USERS_CONFIG] Skipping {username}: expected dict, got {type(data).__name__}")
             continue
         path = USERS_DIR / f"{username}.json"
-        if not path.exists():
-            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            print(f"[USERS_CONFIG] Wrote {path.name}")
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[USERS_CONFIG] Wrote {path.name}")
 
 
 _ensure_users_from_env()
