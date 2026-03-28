@@ -292,6 +292,15 @@ def main():
         handle_zoom_link,
     ))
 
+    # Debug: show loaded users
+    from src.users import list_users, load_user
+    for uname in list_users():
+        try:
+            u = load_user(uname)
+            logger.info(f"Loaded user: {uname} | telegram_id={u.telegram_user_id} (type={type(u.telegram_user_id).__name__})")
+        except Exception as e:
+            logger.error(f"Failed to load user {uname}: {e}")
+
     logger.info("Zumo bot is running...")
     app.run_polling(drop_pending_updates=True)
 
