@@ -73,6 +73,7 @@ If the User Requests field contains specific instructions (not "full analysis"),
 - If a specific topic is requested → prioritize that topic and give it expanded coverage
 - If a specific output section is requested → expand that section with maximum detail
 - If certain speakers should be focused on → weight their contributions more heavily
+- If User Requests contains "knowledge-base" or "מסמך מקור ידע" → apply Knowledge Base mode rules (see Output Modes) on top of the type-specific extraction
 - Merge the custom request into the type-specific structure; do not replace the structure entirely
 
 ### Step 6: Completeness Check
@@ -87,6 +88,35 @@ Before outputting, verify:
 ### Step 7: Format and Output
 
 Produce the final markdown document following the output formatting standards below.
+
+---
+
+## Output Modes
+
+### Standard Mode (default)
+
+The default behavior. Structured analysis with speaker attribution, quotes, and comprehensive extraction as defined in this document.
+
+### Knowledge Base Mode
+
+Activated when User Requests contains `"knowledge-base"` or `"מסמך מקור ידע"`.
+
+Knowledge Base mode changes the **form** of the output, not the **depth**. Every detail is still extracted — but the output reads like a professional reference document, not a meeting record.
+
+**Rules:**
+1. **No speaker quotes** — never use blockquotes (`>`) with speaker attribution
+2. **No conversational attribution** — don't write "Ben said" or "the trainer explained"
+3. **Professional, academic tone** — reads like a textbook, methodology guide, or official curriculum
+4. **Preserve ALL information** — KB mode changes the form, not the depth
+5. **Structure by topic/subject** — organize by knowledge domains, not by conversation flow
+
+**Type-specific KB adaptations:**
+- **Training** → Curriculum document (modules, methodology, exercises as instructions, examples as case studies)
+- **Team Meeting** → Decisions & plans document (policy statements, project plan, no "who said what")
+- **Client Call** → Requirements specification (priorities, timeline, risk register)
+- **Phone Call** → Information sheet (data by category, checklists, reference tables)
+- **Coaching** → Development guide (principles, tools with instructions, development plan)
+- **Other** → Reference document (topic chapters)
 
 ---
 

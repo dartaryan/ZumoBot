@@ -43,6 +43,7 @@ def analyze_transcript(
     speakers: str,
     language: str = "he",
     model: str = SONNET_MODEL,
+    user_requests: str = "full analysis",
 ) -> str:
     """Full structured analysis using the Zumo Bot agent prompt.
 
@@ -57,7 +58,7 @@ def analyze_transcript(
         f"Session Type: {session_type}\n"
         f"Speakers: {speakers or 'Not specified'}\n"
         f"Language: {language}\n"
-        f"User Requests: full analysis\n"
+        f"User Requests: {user_requests}\n"
         f"\n"
         f"--- TRANSCRIPT ---\n"
         f"{transcript_text[:100000]}"

@@ -12,8 +12,8 @@ Execute tasks in order. Pick the first task with status `PENDING`, execute it, t
 | # | Task | Status | Files Touched |
 |---|------|--------|---------------|
 | 1 | Agent 4: API Cleanup + Setup Docs | DONE | requirements.txt, bot.py, .env.example, SETUP.md |
-| 2 | Agent 1: Large File Handling | PENDING | requirements.txt, src/telegram_downloader.py, bot.py, .env.example |
-| 3 | Agent 2: Interactive Questions + KB Mode | PENDING | bot.py, zumo-bot-agent.md, pipeline.py, src/processor.py |
+| 2 | Agent 1: Large File Handling | DONE | requirements.txt, src/telegram_downloader.py, bot.py, .env.example |
+| 3 | Agent 2: Interactive Questions + KB Mode | DONE | bot.py, zumo-bot-agent.md, pipeline.py, src/processor.py |
 | 4 | Agent 3: Dashboard Download/Copy/Export | PENDING | src/dashboard.py |
 
 ---

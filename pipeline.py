@@ -59,6 +59,7 @@ def process_file(
     skip_analysis: bool,
     skip_diarization: bool = False,
     zoom_vtt_path: Path | None = None,
+    user_requests: str = "full analysis",
 ) -> dict:
     """Main pipeline: audio -> transcribe -> analyze -> save."""
 
@@ -183,6 +184,7 @@ def process_file(
                 print("\n[7/8] Analyzing transcript via Claude...")
                 analysis = analyze_transcript(
                     text, user.anthropic_api_key, session_type, speakers, language,
+                    user_requests=user_requests,
                 )
                 print(f"  Analysis complete ({len(analysis)} characters).")
 
