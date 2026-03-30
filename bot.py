@@ -136,15 +136,11 @@ async def _download_file(file_obj, file_size, msg, status_msg, file_path):
         try:
             from src.telegram_downloader import download_large_file
 
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None,
-                lambda: download_large_file(
-                    file_id=file_obj.file_id,
-                    chat_id=msg.chat_id,
-                    message_id=msg.message_id,
-                    dest_path=file_path,
-                ),
+            await download_large_file(
+                file_id=file_obj.file_id,
+                chat_id=msg.chat_id,
+                message_id=msg.message_id,
+                dest_path=file_path,
             )
         except RuntimeError as e:
             await status_msg.edit_text(f"[x] Large file download failed:\n{str(e)}")

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 MAX_BOT_API_SIZE = 20 * 1024 * 1024  # 20 MB
 
 
-def download_large_file(
+async def download_large_file(
     file_id: str,
     chat_id: int,
     message_id: int,
@@ -51,15 +51,15 @@ def download_large_file(
 
     logger.info(f"Downloading large file via MTProto: message {message_id} in chat {chat_id}")
 
-    with Client(
+    async with Client(
         name="zumo_bot_downloader",
         api_id=int(api_id),
         api_hash=api_hash,
         bot_token=bot_token,
         in_memory=True,
     ) as app:
-        msg = app.get_messages(chat_id, message_id)
-        app.download_media(msg, file_name=str(dest_path))
+        msg = await app.get_messages(chat_id, message_id)
+        await app.download_media(msg, file_name=str(dest_path))
 
     logger.info(f"Large file downloaded to {dest_path}")
     return dest_path
