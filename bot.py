@@ -151,6 +151,37 @@ async def _download_file(file_obj, file_size, msg, status_msg, file_path):
     return True
 
 
+async def _progress_ticker(status_msg, file_name, session_type):
+    """Update the status message periodically so the user knows it's alive."""
+    stages = [
+        "Transcribing audio",
+        "Identifying speakers",
+        "Analyzing content",
+        "Generating output",
+    ]
+    try:
+        elapsed = 0
+        while True:
+            await asyncio.sleep(30)
+            elapsed += 30
+            mins = elapsed // 60
+            secs = elapsed % 60
+            stage_idx = min(elapsed // 60, len(stages) - 1)
+            stage = stages[stage_idx]
+            time_str = f"{mins}:{secs:02d}" if mins else f"{secs}s"
+            try:
+                await status_msg.edit_text(
+                    f"[>] Processing: {file_name}\n"
+                    f"    Type: {session_type}\n"
+                    f"    Stage: {stage}...\n"
+                    f"    Elapsed: {time_str}"
+                )
+            except Exception:
+                pass
+    except asyncio.CancelledError:
+        pass
+
+
 async def _process_and_reply(
     status_msg, file_path, file_name, user,
     session_type, speakers, language, user_requests, telegram_id,
@@ -159,26 +190,33 @@ async def _process_and_reply(
     await status_msg.edit_text(
         f"[>] Processing: {file_name}\n"
         f"    Type: {session_type}\n"
-        f"    This may take several minutes..."
+        f"    Starting pipeline..."
+    )
+
+    ticker = asyncio.create_task(
+        _progress_ticker(status_msg, file_name, session_type)
     )
 
     from pipeline import process_file
 
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None,
-        lambda: process_file(
-            file_path=file_path,
-            user=user,
-            session_type=session_type,
-            speakers=speakers,
-            language=language,
-            local_mode=False,
-            skip_analysis=False,
-            skip_diarization=False,
-            user_requests=user_requests,
-        ),
-    )
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: process_file(
+                file_path=file_path,
+                user=user,
+                session_type=session_type,
+                speakers=speakers,
+                language=language,
+                local_mode=False,
+                skip_analysis=False,
+                skip_diarization=False,
+                user_requests=user_requests,
+            ),
+        )
+    finally:
+        ticker.cancel()
 
     if result["status"] == "success":
         duration_str = format_duration(result.get("original_duration", 0))
