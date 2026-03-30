@@ -3,177 +3,150 @@
 > Written: 2026-03-28
 > Author: Claude Opus (session with Ben Akiva)
 > Project: `c:\Users\darta\Desktop\פרויקטים\zumo`
+> Repo: https://github.com/dartaryan/ZumoBot
 
 ---
 
-## What Changed This Session
+## Current Status: BLOCKED on Railway env var issue
 
-### Telegram Bot -- DONE (Priority 4)
+The deployment infrastructure is built but the bot can't start because one env var (`ZUMO_USER_HEBREW_AI_KEY`) returns empty despite being set in Railway's UI. Other env vars in the same pattern (ZUMO_USER_ANTHROPIC_KEY, ZUMO_USER_SLUG, etc.) work fine.
 
-Built `bot.py` using `python-telegram-bot`, following the same pattern as `tiktok-pipeline/bot.py`.
+---
 
-#### What Was Added
+## What Was Done This Session
 
+### Deployment Infrastructure (Priority 5) -- PARTIALLY DONE
+
+#### Files Created
+| File | Purpose |
+|------|---------|
+| `Dockerfile` | Python 3.11-slim + ffmpeg, no torch/pyannote |
+| `.dockerignore` | Excludes output/, .env, .git, design-system/ |
+| `railway.toml` | Dockerfile builder, restart on failure |
+
+#### Files Modified
 | File | Change |
-|------|--------|
-| `bot.py` | New -- Telegram bot, 3 handlers (start, file, zoom URL) |
-| `src/users.py` | Added `find_user_by_telegram_id()` -- scans all user JSONs |
-| `requirements.txt` | Added `python-telegram-bot>=21.0` |
-| `.env.example` | Added `TELEGRAM_BOT_TOKEN` |
+|------|---------|
+| `requirements.txt` | Commented out pyannote/huggingface (optional, skipped gracefully) |
+| `src/users.py` | Added `_ensure_users_from_env()` -- creates user JSON from individual `ZUMO_USER_*` env vars or `USERS_CONFIG` JSON. Includes extensive boot logging to stderr. |
+| `src/dashboard.py` | Added `_load_sessions_from_github()`, `generate_dashboard_from_github()` -- reads sessions from GitHub API to generate dashboard HTML |
+| `src/storage.py` | Added `save_dashboard_to_github()` -- pushes dashboard HTML to GitHub after each session. `save_session()` now auto-regenerates dashboard. |
+| `pipeline.py` | Passes `user_name` and `pw_hash` to `save_session()` |
+| `src/config.py` | Fixed `SONNET_MODEL` to `claude-sonnet-4-6` |
+| `bot.py` | Added extensive boot diagnostics (ZUMO env vars, user loading, etc.) to stderr |
+| `.env.example` | Added `DASHBOARD_BASE_URL`, `USERS_CONFIG`, `ZUMO_USER_*` docs |
 
-#### How It Works
+#### External Setup (DONE)
+- **GitHub data repo**: `dartaryan/zumo-data` (private) -- initialized with README, has session data from a successful test run
+- **Netlify**: `zumobot.netlify.app` -- connected to `dartaryan/zumo-data`, serves dashboard HTML
+- **Railway**: Project created, connected to `dartaryan/ZumoBot`, Dockerfile builds successfully
 
-1. User sends audio/video file (or voice/video note) to the bot via Telegram
-2. Bot looks up `telegram_user_id` across all `users/*.json` files to authenticate
-3. Bot downloads the file to a temp directory
-4. Bot calls `process_file()` from `pipeline.py` in a thread executor (non-blocking)
-5. Pipeline runs the full 8 steps (extract, silence removal, diarize, transcribe, analyze, save)
-6. Bot replies with duration, transcript length, and dashboard URL
-7. Temp files cleaned up
-
-#### Auth Model
-
-No env-var allowlist. Auth is purely by `telegram_user_id` field in `users/*.json`. If a user's Telegram ID isn't in any user config, they get "Access denied" with their ID shown (so you can add them).
-
-`find_user_by_telegram_id(telegram_id)` returns `(username, UserConfig)` or `None`.
-
-#### Caption Metadata
-
-Users can set session metadata in the file's caption:
-
+#### Railway Env Vars (currently set)
 ```
-type:training speakers:Ben,Omri lang:he
+DASHBOARD_BASE_URL=https://zumobot.netlify.app
+GITHUB_BRANCH=main
+GITHUB_REPO=dartaryan/zumo-data
+GITHUB_TOKEN=<PAT with repo contents write>
+HUGGINGFACE_TOKEN=<optional>
+TELEGRAM_BOT_TOKEN=<from @BotFather>
+ZUMO_USER_ANTHROPIC_KEY=sk-ant-api03-...
+ZUMO_USER_HEBREW_AI_KEY=sk_4b6zqbvj4phavrp2_f2a771606c5b62379bd4
+ZUMO_USER_LANGUAGE=he
+ZUMO_USER_NAME=Ben Akiva
+ZUMO_USER_SLUG=ben-akiva
+ZUMO_USER_TELEGRAM_ID=8553241584
 ```
-
-All optional. Defaults: `type:other`, no speakers, language from user config.
-
-#### Zoom URL Support
-
-Text messages containing Zoom recording links (`zoom.us/rec/share/...` or `zoom.us/rec/play/...`) are detected and processed. Passcode extracted from `?pwd=` query param if present. Default session type: `team-meeting`.
-
-#### Handlers
-
-| Handler | Trigger | Purpose |
-|---------|---------|---------|
-| `/start` | Command | Shows help text with session types |
-| File handler | Audio, video, voice, video note, document | Downloads + runs pipeline |
-| Text handler | Non-command text | Checks for Zoom URLs |
-
-#### Status Messages
-
-No emojis (Ben's rules). Uses bracket markers:
-- `[>]` -- in progress
-- `[=]` -- done
-- `[x]` -- error
-
-#### Not Tested End-to-End
-
-Syntax verified. The bot requires `TELEGRAM_BOT_TOKEN` in `.env` and valid GitHub credentials. To test:
-
-```bash
-# Add bot token to .env
-echo "TELEGRAM_BOT_TOKEN=your_token" >> .env
-
-# Run the bot
-python bot.py
-```
-
-Then send an audio file to the bot on Telegram.
-
-#### Known Limitations
-
-- Telegram file size limit is 20MB for downloads via Bot API. For larger files, users need to use the CLI pipeline or send a Zoom link.
-- `process_file()` prints progress to stdout (server console), not to the Telegram chat. The user sees download -> processing -> done. No step-by-step progress.
-- `Document.ALL` filter catches all documents; non-media extensions are rejected inside the handler.
 
 ---
 
-### Previous: Agent Prompt Integration -- DONE (Priority 2)
+## THE BLOCKER
 
-See git history. Replaced hardcoded analysis prompt with `zumo-bot-agent.md`.
+### Problem
+`os.getenv("ZUMO_USER_HEBREW_AI_KEY")` returns `""` in the Railway container, even though:
+1. The variable IS set in Railway's UI (screenshot confirmed, value visible)
+2. Other `ZUMO_USER_*` vars work fine (ANTHROPIC_KEY, SLUG, NAME, TELEGRAM_ID all load correctly)
+3. The code is identical for all vars: `os.getenv("ZUMO_USER_HEBREW_AI_KEY", "")`
 
-### Previous: Speaker Diarization -- DONE (Priority 1)
+### What We Tried
+1. `USERS_CONFIG` single JSON env var -- Railway truncated it (char 361 limit?)
+2. Individual `ZUMO_USER_*` env vars -- most work, HEBREW_AI_KEY doesn't
+3. Multiple redeploys
+4. Added debug logging showing all ZUMO_* env vars (but latest code may not have deployed)
 
-See git history (commit `eefdf03`).
+### Theories
+- Railway may have a character limit or encoding issue with certain env var values
+- The value `sk_4b6zqbvj4phavrp2_f2a771606c5b62379bd4` might contain a character Railway doesn't like
+- Railway might cache env vars and not update on restart vs rebuild
+- The "Redeploy" button re-deploys old code, not the latest commit -- need "Trigger Deploy" or a new push
 
-### Previous: Dashboard HTML Generator -- DONE (Priority 3)
-
-See git history (commit `13e139b`).
+### Next Steps to Debug
+1. Use Railway's **Raw Editor** to inspect the actual env vars being passed
+2. Try renaming the var (e.g., `HEBREW_AI_KEY` instead of `ZUMO_USER_HEBREW_AI_KEY`)
+3. Try setting the value to something simple (like `test123`) to rule out value encoding
+4. Check if the latest commit (`10995c0`) is actually deployed (the ZUMO env var dump wasn't showing)
+5. Alternative: skip env vars entirely -- store user config in the `zumo-data` GitHub repo and fetch on startup
 
 ---
 
-## What's NOT Done Yet
+## Secondary Issues
 
-### Priority 5: Deployment
+### 409 Conflict on Startup
+Telegram `getUpdates` returns 409 because Railway briefly runs old + new containers during deploy transitions. This resolves in ~20 seconds. Not a real problem -- can be suppressed with an error handler.
 
-Deploy the bot and dashboard to production.
+### Dashboard Not Loading on Netlify
+`zumobot.netlify.app` shows "Page not found". The root has no index.html -- the dashboard is at `zumobot.netlify.app/ben-akiva/`. Needs either:
+- A redirect from root to the user dashboard
+- Ben to bookmark `zumobot.netlify.app/ben-akiva/`
 
-#### Bot Deployment (Railway)
+### Zoom Links
+"This recording does not exist" -- the specific Zoom recordings Ben tested with are expired/deleted. Not a code bug. Test with a valid recording.
 
-1. Create a Railway project with the zumo repo
-2. Set environment variables in Railway dashboard:
-   - `TELEGRAM_BOT_TOKEN` -- from @BotFather on Telegram
-   - `GITHUB_TOKEN` -- PAT with repo + contents write access
-   - `GITHUB_REPO` -- `owner/zumo-data` format
-   - `GITHUB_BRANCH` -- `main`
-   - `HUGGINGFACE_TOKEN` -- for speaker diarization (optional, heavy)
-3. Start command: `python bot.py`
-4. No port needed -- bot uses polling, not webhook
-5. Railway plan: Starter ($5/mo) should be enough for 5 users
+### Dashboard Password
+`web_password_hash` must be a SHA-256 hex string, not a plain number. Hash of `305065575` is: `45087792706dfed4db7cf6b004a57896ebf03988b58e4f0a7e79f9b595080eaa`. Set via `ZUMO_USER_PASSWORD_HASH` env var.
 
-#### Diarization on Railway
+---
 
-pyannote.audio pulls in torch (~2GB). Railway's free tier has 512MB RAM. Options:
-- **Option A**: Skip diarization on Railway (bot runs with `skip_diarization=True`). Simplest.
-- **Option B**: Use a larger Railway plan with 2GB+ RAM. Install torch CPU-only to save space.
-- **Option C**: Run diarization as a separate service (overkill for 5 users).
+## Architecture Overview
 
-Recommendation: Option A for now. Diarization is nice-to-have, not critical.
-
-#### Dashboard Deployment (Netlify)
-
-1. The pipeline saves sessions to a GitHub repo (`GITHUB_REPO`)
-2. `src/dashboard.py` generates a self-contained `index.html` per user
-3. Two approaches:
-   - **Static**: Run `python pipeline.py --user X --dashboard` to regenerate HTML, commit to a `gh-pages` branch or separate repo, deploy via Netlify
-   - **GitHub Pages**: Enable GitHub Pages on the data repo directly (simpler)
-4. Set `DASHBOARD_BASE_URL` in `.env` to the deployed URL (e.g., `https://zumo.netlify.app`)
-5. The bot will then return clickable dashboard links with session anchors
-
-#### Netlify Config (if using Netlify)
-
-```toml
-# netlify.toml
-[build]
-  publish = "output/"
-  command = "echo 'static site'"
 ```
-
-Or use `_redirects` for pretty URLs.
-
-#### Domain
-
-No custom domain yet. Use `zumo-XXXX.netlify.app` or `owner.github.io/zumo-data` for now.
-
-### Priority 6: Onboarding Guide
-
-Markdown doc for new users. Should cover:
-- How to get a Telegram bot token from @BotFather
-- How to create a `users/username.json` with their API keys
-- How to find their Telegram user ID (forward a message to @userinfobot)
-- How to use the bot (send files, captions, Zoom links)
-- How to use the CLI pipeline for large files
+[Telegram User] --sends file--> [Bot on Railway]
+                                      |
+                                 process_file()
+                                      |
+                          [Hebrew AI] transcribe
+                          [Claude] analyze
+                                      |
+                              save to GitHub
+                              (dartaryan/zumo-data)
+                                      |
+                          push index.html dashboard
+                                      |
+                              [Netlify serves it]
+                              zumobot.netlify.app
+```
 
 ---
 
 ## Key Files to Read First
 
-1. `bot.py` -- Telegram bot (Priority 4, just built)
-2. `pipeline.py` -- Full 8-step pipeline flow, `process_file()` function
-3. `src/users.py` -- User loading + `find_user_by_telegram_id()`
-4. `src/config.py` -- Env vars, session types, model config
-5. `zumo-bot-agent.md` -- System prompt for analysis step
-6. `src/dashboard.py` -- HTML dashboard generation
+1. `src/users.py` -- User config loading + `_ensure_users_from_env()` (the problematic area)
+2. `bot.py` -- Telegram bot with boot diagnostics
+3. `src/config.py` -- All env vars and constants
+4. `pipeline.py` -- Full 8-step pipeline, `process_file()`
+5. `src/storage.py` -- GitHub storage + dashboard push
+6. `src/dashboard.py` -- Dashboard generation (local + GitHub modes)
+
+---
+
+## What Worked Earlier (Before Auth Broke)
+
+The bot DID successfully process a voice recording once (commit `7a0d9a6` in zumo-data shows "Update dashboard for ben-akiva"). So the full pipeline works:
+- Telegram file download: OK
+- Audio extraction + silence removal: OK
+- Transcription via Hebrew AI: OK
+- Claude analysis: failed (wrong model ID, now fixed to `claude-sonnet-4-6`)
+- GitHub save: OK
+- Dashboard generation + push: OK
 
 ---
 
@@ -184,3 +157,16 @@ Markdown doc for new users. Should cover:
 - Don't over-engineer. 5 users max. Keep it simple.
 - Dark mode only. Rubik font. Very rounded. Thick strokes.
 - He builds cathedrals when houses would do -- nudge him to ship.
+
+---
+
+## Debug Logging Currently in Code
+
+`bot.py` and `src/users.py` have extensive boot diagnostics that print to stderr:
+- `[BOOT] ZUMO env vars: {...}` -- all env vars starting with ZUMO
+- `[BOOT] name = ...` etc. -- each field value
+- `[BOOT] Wrote user from env vars: ben-akiva`
+- `[BOOT] list_users() = [...]`
+- `[BOOT] FAILED username: error message`
+
+**Remove this debug logging** once the env var issue is resolved.

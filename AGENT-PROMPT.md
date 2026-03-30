@@ -1,0 +1,1 @@
+Read `PLAN.md` in the project root. Look at the **Task Queue** table at the top. Find the first task with status `PENDING`. Execute that task following its instructions in the document. When done, edit PLAN.md and change that task's status from `PENDING` to `DONE` in the Task Queue table.

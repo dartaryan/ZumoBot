@@ -1,13 +1,19 @@
+# === Core (required) ===
 anthropic>=0.49.0
 requests>=2.31
 PyGithub>=2.5.0
 python-dotenv>=1.0.0
 python-slugify>=8.0.0
 python-telegram-bot>=21.0
-webvtt-py>=0.5.0
-yt-dlp>=2024.0.0
 
-# Speaker diarization (optional — heavy, pulls in torch ~2GB)
+# === Large file support (recommended — enables downloading files > 20MB) ===
+pyrogram>=2.0.0
+
+# === Zoom recording download (optional) ===
+yt-dlp>=2024.0.0
+webvtt-py>=0.5.0
+
+# === Speaker diarization (optional — heavy, pulls in torch ~2GB) ===
 # Not included by default — the pipeline skips diarization when not installed.
 # To install locally:
 #   pip install torch==2.6.0+cpu torchaudio==2.6.0+cpu --index-url https://download.pytorch.org/whl/cpu
