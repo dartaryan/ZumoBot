@@ -36,6 +36,7 @@ def _download_in_own_loop(
                 api_hash=api_hash,
                 bot_token=bot_token,
                 in_memory=True,
+                no_updates=True,
             ) as app:
                 msg = await app.get_messages(chat_id, message_id)
                 await app.download_media(msg, file_name=str(dest_path))
