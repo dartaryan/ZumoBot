@@ -300,6 +300,13 @@ body{font-family:'Rubik',sans-serif;background:var(--bg-base);color:var(--text-s
 .tab:hover{color:var(--text-secondary);background:var(--bg-hover)}
 .tab.active{color:var(--accent-text);background:var(--accent-muted);border-color:rgba(251,191,36,0.2)}
 
+/* Action Bar */
+.action-bar{display:flex;gap:8px;padding:8px 22px;border-top:1px solid var(--border)}
+.action-btn{display:flex;align-items:center;gap:6px;padding:8px 16px;border:1px solid var(--border);border-radius:12px;background:var(--bg-elevated);color:var(--text-secondary);font-size:12px;font-weight:500;font-family:inherit;cursor:pointer;transition:all 200ms}
+.action-btn:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--border-strong)}
+.action-btn svg{width:14px;height:14px}
+.action-btn.copied{color:var(--success);border-color:var(--success)}
+
 /* Content Panel */
 .content-area{padding:0 22px 22px}
 .content-inner{background:var(--bg-elevated);border:1px solid var(--border);border-radius:16px;padding:24px;max-height:70vh;overflow-y:auto}
@@ -348,6 +355,8 @@ body{font-family:'Rubik',sans-serif;background:var(--bg-base);color:var(--text-s
     .tab{padding:8px 16px;font-size:12px}
     .content-area{padding:0 16px 16px}
     .content-inner{padding:16px}
+    .action-bar{padding:6px 16px;gap:6px}
+    .action-btn{padding:6px 12px;font-size:11px}
     .header{padding:10px 16px;border-radius:16px}
     .header-brand img{width:36px;height:36px}
     .header .wordmark{font-size:18px}
@@ -471,6 +480,20 @@ function init(){
                 '<div class="tabs">'+
                     '<button class="tab active" onclick="event.stopPropagation();switchTab('+i+',\'transcript\')">\u05EA\u05DE\u05DC\u05D5\u05DC</button>'+
                     (hasA?'<button class="tab" onclick="event.stopPropagation();switchTab('+i+',\'analysis\')">\u05E0\u05D9\u05EA\u05D5\u05D7</button>':'')+
+                '</div>'+
+                '<div class="action-bar">'+
+                    '<button class="action-btn" onclick="event.stopPropagation();downloadMd('+i+')">'+
+                        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>'+
+                        '<span>Download</span>'+
+                    '</button>'+
+                    '<button class="action-btn" onclick="event.stopPropagation();copyMd('+i+')">'+
+                        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect width="13" height="13" x="9" y="9" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'+
+                        '<span>Copy</span>'+
+                    '</button>'+
+                    '<button class="action-btn" onclick="event.stopPropagation();exportPdf('+i+')">'+
+                        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect width="12" height="8" x="6" y="14"/></svg>'+
+                        '<span>PDF</span>'+
+                    '</button>'+
                 '</div>'+
                 '<div class="content-area">'+
                     '<div class="content-inner md" id="content-'+i+'"></div>'+
@@ -627,6 +650,81 @@ function inl(s){
         .replace(/\*(.+?)\*/g,'<em>$1</em>')
         .replace(/`(.+?)`/g,'<code>$1</code>')
         .replace(/\[(.+?)\]\((.+?)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+
+/* ─── Download / Copy / Export ─── */
+function getActiveContent(i){
+    var s=SESSIONS[i];
+    var card=document.querySelectorAll('.card')[i];
+    var tabs=card.querySelectorAll('.tab');
+    if(s.analysis&&tabs[1]&&tabs[1].classList.contains('active')){
+        return {text:s.analysis,label:'analysis'};
+    }
+    return {text:s.transcript,label:'transcript'};
+}
+
+function downloadMd(i){
+    var data=getActiveContent(i);
+    var s=SESSIONS[i];
+    var blob=new Blob([data.text],{type:'text/markdown;charset=utf-8'});
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download=s.id+'-'+data.label+'.md';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+}
+
+function copyMd(i){
+    var data=getActiveContent(i);
+    var card=document.querySelectorAll('.card')[i];
+    var btn=card.querySelectorAll('.action-btn')[1];
+    var span=btn.querySelector('span');
+    navigator.clipboard.writeText(data.text).then(function(){
+        btn.classList.add('copied');
+        span.textContent='Copied';
+        setTimeout(function(){btn.classList.remove('copied');span.textContent='Copy';},2000);
+    });
+}
+
+function exportPdf(i){
+    var data=getActiveContent(i);
+    var s=SESSIONS[i];
+    var rendered=renderMd(data.text);
+    var w=window.open('','_blank');
+    w.document.write('<!DOCTYPE html><html lang="he" dir="rtl"><head><meta charset="UTF-8">'+
+        '<title>'+esc(s.title)+'</title>'+
+        '<link rel="preconnect" href="https://fonts.googleapis.com">'+
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'+
+        '<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap" rel="stylesheet">'+
+        '<style>'+
+        '*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}'+
+        'body{font-family:"Rubik",sans-serif;background:#fff;color:#1C1917;font-size:15px;line-height:1.8;max-width:700px;margin:0 auto;padding:40px 32px}'+
+        'h1{font-size:22px;font-weight:700;color:#C2410C;margin:28px 0 12px}'+
+        'h1:first-child{margin-top:0}'+
+        'h2{font-size:18px;font-weight:600;color:#C2410C;border-bottom:2px solid #FDBA74;padding-bottom:6px;margin:24px 0 10px}'+
+        'h3{font-size:15px;font-weight:600;color:#9A3412;margin:18px 0 8px}'+
+        'p{margin-bottom:12px}p:last-child{margin-bottom:0}'+
+        'strong{font-weight:600}'+
+        'blockquote{border-right:3px solid #F97316;padding-right:16px;margin:16px 0;color:#44403C;font-style:italic}'+
+        'blockquote p{margin-bottom:8px}'+
+        'hr{border:none;height:2px;background:#FDBA74;margin:20px 0}'+
+        'ul,ol{padding-right:24px;margin:8px 0 12px}li{margin-bottom:4px}'+
+        'table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}'+
+        'th{text-align:right;font-weight:600;font-size:12px;color:#9A3412;background:#FFF7ED;text-transform:uppercase;letter-spacing:0.5px;padding:10px 12px;border-bottom:2px solid #FDBA74}'+
+        'td{padding:12px;border-bottom:1px solid #FED7AA}'+
+        'tr:nth-child(even) td{background:#FFFBEB}'+
+        'code{background:#FFF7ED;color:#9A3412;padding:2px 6px;border-radius:4px;font-size:13px}'+
+        'a{color:#EA580C;text-decoration:none}'+
+        '.meta{font-size:13px;color:#78716C;margin-bottom:24px;padding-bottom:12px;border-bottom:1px solid #FED7AA}'+
+        '@media print{body{padding:0}@page{margin:2cm}}'+
+        '</style></head><body>'+
+        '<div class="meta">'+esc(s.title)+' \u2014 '+esc(s.date)+' \u2014 '+esc(s.typeLabel)+'</div>'+
+        rendered+
+        '<script>window.onload=function(){window.print()}<\/script>'+
+        '</body></html>');
+    w.document.close();
 }
 
 /* ─── Keyboard: Escape to close ─── */
