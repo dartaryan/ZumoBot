@@ -119,6 +119,40 @@ def remove_silence(
     return Path(output_path), removed
 
 
+def compress_for_upload(
+    input_path: str | Path,
+    output_path: str | Path,
+    target_mb: int = 20,
+) -> Path:
+    """Convert any audio/video to a lean MP3 targeting a specific file size.
+
+    Always re-encodes to mono MP3 at 16kHz. Uses variable bitrate to hit
+    the target size. Called early in the pipeline, before transcription.
+    """
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+
+    duration = get_duration(input_path)
+    if duration <= 0:
+        raise RuntimeError(f"Cannot determine duration of {input_path}")
+
+    # Calculate target bitrate: target_bytes * 8 / duration_seconds
+    target_bits = target_mb * 1024 * 1024 * 8
+    target_bitrate = int(target_bits / duration)
+    # Clamp between 32k and 128k
+    target_bitrate = max(32_000, min(128_000, target_bitrate))
+
+    subprocess.run(
+        ["ffmpeg", "-i", str(input_path),
+         "-vn", "-acodec", "libmp3lame",
+         "-b:a", str(target_bitrate),
+         "-ar", "16000", "-ac", "1",
+         str(output_path), "-y"],
+        check=True, capture_output=True, text=True,
+    )
+    return output_path
+
+
 MAX_UPLOAD_SIZE_MB = 25
 
 

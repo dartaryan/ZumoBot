@@ -41,7 +41,14 @@ MEDIA_EXTENSIONS = {
 }
 
 # Conversation states
-WAITING_TYPE, WAITING_SPEAKERS, WAITING_PURPOSE, WAITING_FORMAT = range(4)
+(
+    WAITING_TYPE,
+    WAITING_SPEAKERS,
+    WAITING_PURPOSE,
+    WAITING_FORMAT,
+    WAITING_CONVERSATION,
+    WAITING_CONFIRM,
+) = range(6)
 
 # Session type labels for inline keyboard
 SESSION_TYPE_LABELS = [
@@ -56,6 +63,8 @@ SESSION_TYPE_LABELS = [
 _CONVERSATION_KEYS = [
     "tmp_dir", "file_path", "file_name", "user", "language",
     "status_msg", "session_type", "speakers", "purpose", "output_format",
+    "extra_context", "gemini_text", "hebrew_ai_text",
+    "preprocess_task", "preprocess_done",
 ]
 
 
@@ -132,7 +141,7 @@ async def _download_file(file_obj, file_size, msg, status_msg, file_path):
 
     if file_size > MAX_BOT_API_SIZE:
         size_mb = file_size / (1024 * 1024)
-        await status_msg.edit_text(f"[>] Large file ({size_mb:.1f} MB) — downloading via MTProto...")
+        await status_msg.edit_text(f"[>] Large file ({size_mb:.1f} MB) -- downloading via MTProto...")
         try:
             from src.telegram_downloader import download_large_file
 
@@ -182,11 +191,99 @@ async def _progress_ticker(status_msg, file_name, session_type):
         pass
 
 
+async def _run_preprocess(file_path, user, language):
+    """Run compression + dual transcription in background.
+
+    Returns (hebrew_ai_text, gemini_text).
+    Runs in executor since Hebrew AI uses blocking requests.
+    """
+    from src.audio import compress_for_upload, get_duration, detect_silence, remove_silence
+    from src.config import SILENCE_THRESHOLD_DB
+
+    loop = asyncio.get_event_loop()
+
+    def _do_preprocess():
+        import tempfile as _tf
+        tmp = Path(_tf.mkdtemp(prefix="zumo-pre-"))
+
+        # Silence removal
+        silences = detect_silence(
+            file_path, SILENCE_THRESHOLD_DB, user.silence_threshold_seconds,
+        )
+        trimmed_path = tmp / "trimmed.mp3"
+        remove_silence(file_path, silences, trimmed_path)
+
+        # Compress
+        upload_path = tmp / "compressed.mp3"
+        compress_for_upload(trimmed_path, upload_path)
+
+        # Dual transcription (parallel)
+        from concurrent.futures import ThreadPoolExecutor
+        from src.transcriber import transcribe
+        from src.gemini_transcriber import transcribe_with_diarization
+
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        h_text = ""
+        g_text = ""
+
+        def _hebrew():
+            t, _ = transcribe(upload_path, user.hebrew_ai_api_key, language)
+            return t
+
+        def _gemini():
+            if not gemini_key:
+                return ""
+            return transcribe_with_diarization(upload_path, api_key=gemini_key)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fh = pool.submit(_hebrew)
+            fg = pool.submit(_gemini)
+            try:
+                h_text = fh.result()
+            except Exception as e:
+                logger.error(f"Hebrew AI preprocess failed: {e}")
+            try:
+                g_text = fg.result()
+            except Exception as e:
+                logger.error(f"Gemini preprocess failed: {e}")
+
+        # Cleanup temp
+        shutil.rmtree(tmp, ignore_errors=True)
+        return h_text, g_text
+
+    return await loop.run_in_executor(None, _do_preprocess)
+
+
+def _analyze_gemini_speakers(gemini_text: str) -> dict:
+    """Quick analysis of Gemini transcript to extract speaker info.
+
+    Returns dict with:
+      - num_speakers: int
+      - speaker_labels: list of unique labels found
+      - summary_hint: short string describing what was detected
+    """
+    if not gemini_text:
+        return {"num_speakers": 0, "speaker_labels": [], "summary_hint": ""}
+
+    labels = re.findall(r"(Speaker [A-Z])", gemini_text)
+    unique = list(dict.fromkeys(labels))  # preserve order
+    return {
+        "num_speakers": len(unique),
+        "speaker_labels": unique,
+        "summary_hint": f"זוהו {len(unique)} דוברים" if unique else "",
+    }
+
+
 async def _process_and_reply(
     status_msg, file_path, file_name, user,
     session_type, speakers, language, user_requests, telegram_id,
+    hebrew_ai_text="", gemini_text="",
 ):
-    """Run the pipeline and send the result."""
+    """Run the pipeline and send the result.
+
+    If hebrew_ai_text and gemini_text are provided (from preprocess),
+    skip the transcription steps and go straight to analysis.
+    """
     await status_msg.edit_text(
         f"[>] Processing: {file_name}\n"
         f"    Type: {session_type}\n"
@@ -197,24 +294,80 @@ async def _process_and_reply(
         _progress_ticker(status_msg, file_name, session_type)
     )
 
-    from pipeline import process_file
-
     try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: process_file(
-                file_path=file_path,
-                user=user,
-                session_type=session_type,
-                speakers=speakers,
-                language=language,
-                local_mode=False,
-                skip_analysis=False,
-                skip_diarization=False,
-                user_requests=user_requests,
-            ),
-        )
+        if hebrew_ai_text:
+            # We already have transcriptions — run analysis directly
+            from src.processor import analyze_transcript, generate_summary
+            from src.formatter import format_analysis_md, format_transcript_md, generate_folder_name
+            from src.storage import ensure_repo_structure, save_session
+            from src.audio import get_duration
+            from datetime import datetime
+
+            loop = asyncio.get_event_loop()
+
+            original_duration = await loop.run_in_executor(None, lambda: get_duration(file_path))
+            timestamp = datetime.now()
+
+            summary = await loop.run_in_executor(
+                None, lambda: generate_summary(hebrew_ai_text, user.anthropic_api_key)
+            )
+
+            analysis = await loop.run_in_executor(
+                None, lambda: analyze_transcript(
+                    hebrew_ai_text, user.anthropic_api_key,
+                    session_type, speakers, language,
+                    user_requests=user_requests,
+                    gemini_text=gemini_text,
+                )
+            )
+
+            folder_name = generate_folder_name(
+                session_type, speakers or file_path.stem, timestamp,
+            )
+            transcript_md = format_transcript_md(
+                hebrew_ai_text, file_path.stem, session_type, speakers, language,
+                original_duration, original_duration, 0, timestamp,
+            )
+            analysis_md = format_analysis_md(
+                analysis, summary, session_type, speakers, timestamp,
+            ) if analysis else None
+
+            ensure_repo_structure(user.dashboard_slug)
+            dashboard_url = await loop.run_in_executor(
+                None, lambda: save_session(
+                    user.dashboard_slug, folder_name,
+                    transcript_md, analysis_md, summary,
+                    user_name=user.name,
+                    pw_hash=user.web_password_hash,
+                )
+            )
+
+            result = {
+                "status": "success",
+                "folder_name": folder_name,
+                "transcript_length": len(hebrew_ai_text),
+                "original_duration": original_duration,
+                "dashboard_url": dashboard_url,
+            }
+        else:
+            # Fallback: run the full pipeline
+            from pipeline import process_file
+
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: process_file(
+                    file_path=file_path,
+                    user=user,
+                    session_type=session_type,
+                    speakers=speakers,
+                    language=language,
+                    local_mode=False,
+                    skip_analysis=False,
+                    skip_diarization=False,
+                    user_requests=user_requests,
+                ),
+            )
     finally:
         ticker.cancel()
 
@@ -324,10 +477,21 @@ async def handle_file_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["speakers"] = ""
     context.user_data["purpose"] = ""
     context.user_data["output_format"] = "standard"
+    context.user_data["extra_context"] = []
+    context.user_data["preprocess_done"] = False
 
-    await status_msg.edit_text("[OK] File downloaded.")
+    await status_msg.edit_text(
+        "[OK] File downloaded.\n"
+        "[>] Starting transcription in background..."
+    )
 
-    # Ask session type
+    # Start preprocessing (compression + dual transcription) in background
+    preprocess_task = asyncio.create_task(
+        _run_preprocess(file_path, user, language)
+    )
+    context.user_data["preprocess_task"] = preprocess_task
+
+    # Ask session type while transcription runs in background
     keyboard = []
     for label, value in SESSION_TYPE_LABELS:
         keyboard.append([InlineKeyboardButton(label, callback_data=f"type:{value}")])
@@ -349,11 +513,29 @@ async def handle_type_choice(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if value != "skip":
         context.user_data["session_type"] = value
 
-    await query.edit_message_text(f"סוג: {value}")
+    type_label = dict(SESSION_TYPE_LABELS).get(value, value) if value != "skip" else "דלג"
+    await query.edit_message_text(f"סוג: {type_label}")
+
+    # Check if preprocess is done — if so, suggest speakers from Gemini
+    preprocess_task = context.user_data.get("preprocess_task")
+    gemini_hint = ""
+
+    if preprocess_task and preprocess_task.done():
+        try:
+            h_text, g_text = preprocess_task.result()
+            context.user_data["hebrew_ai_text"] = h_text
+            context.user_data["gemini_text"] = g_text
+            context.user_data["preprocess_done"] = True
+
+            info = _analyze_gemini_speakers(g_text)
+            if info["num_speakers"] > 0:
+                gemini_hint = f"\n\n{info['summary_hint']} בהקלטה."
+        except Exception:
+            pass
 
     keyboard = [[InlineKeyboardButton("דלג (Skip)", callback_data="speakers:skip")]]
     await query.message.reply_text(
-        "מי הדוברים? (שמות מופרדים בפסיק, או לחץ דלג)",
+        f"מי הדוברים? (שמות מופרדים בפסיק, או לחץ דלג){gemini_hint}",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return WAITING_SPEAKERS
@@ -418,7 +600,7 @@ async def handle_purpose_text(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def handle_format_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle output format selection and start processing."""
+    """Handle output format selection — move to free-text conversation."""
     query = update.callback_query
     await query.answer()
 
@@ -428,10 +610,126 @@ async def handle_format_choice(update: Update, context: ContextTypes.DEFAULT_TYP
     format_label = "מסמך מקור ידע" if value == "knowledge-base" else "ניתוח מובנה"
     await query.edit_message_text(f"פורמט: {format_label}")
 
+    # Ask for additional context (WAITING_CONVERSATION)
+    keyboard = [
+        [InlineKeyboardButton("המשך (Continue)", callback_data="conversation:done")],
+    ]
+    await query.message.reply_text(
+        "יש משהו נוסף שחשוב לי לדעת על השיחה הזאת?\n"
+        "אפשר לכתוב הקשר, רקע, או בקשות מיוחדות.\n"
+        "או לחץ המשך.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return WAITING_CONVERSATION
+
+
+async def handle_conversation_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle free-text additional context from user."""
+    text = update.message.text.strip()
+
+    # Check for "done" signals
+    done_signals = {"זהו", "המשך", "סיים", "done", "continue", "go", "יאללה"}
+    if text.lower() in done_signals:
+        return await _proceed_to_confirm(update.message, context)
+
+    # Accumulate context
+    context.user_data.setdefault("extra_context", []).append(text)
+
+    keyboard = [
+        [InlineKeyboardButton("זהו, המשך (Done)", callback_data="conversation:done")],
+    ]
+    await update.message.reply_text(
+        "קיבלתי. עוד משהו? או לחץ המשך.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return WAITING_CONVERSATION
+
+
+async def handle_conversation_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle conversation done button."""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("ממשיכים...")
+    return await _proceed_to_confirm(query.message, context)
+
+
+async def _proceed_to_confirm(message, context: ContextTypes.DEFAULT_TYPE):
+    """Show confirmation summary before processing."""
+    session_type = context.user_data.get("session_type", "other")
+    speakers = context.user_data.get("speakers", "")
+    purpose = context.user_data.get("purpose", "")
+    output_format = context.user_data.get("output_format", "standard")
+    extra = context.user_data.get("extra_context", [])
+
+    type_info = SESSION_TYPES.get(session_type, {})
+    type_label = type_info.get("he", session_type)
+    format_label = "מסמך מקור ידע" if output_format == "knowledge-base" else "ניתוח מובנה"
+
+    summary_lines = [
+        f"סוג: {type_label}",
+        f"דוברים: {speakers or 'לא צוין'}",
+        f"מטרה: {purpose or 'ניתוח מלא'}",
+        f"פורמט: {format_label}",
+    ]
+    if extra:
+        summary_lines.append(f"הקשר נוסף: {'; '.join(extra)}")
+
+    # Check preprocess status
+    preprocess_task = context.user_data.get("preprocess_task")
+    preprocess_done = context.user_data.get("preprocess_done", False)
+    if preprocess_task and preprocess_task.done() and not preprocess_done:
+        try:
+            h_text, g_text = preprocess_task.result()
+            context.user_data["hebrew_ai_text"] = h_text
+            context.user_data["gemini_text"] = g_text
+            context.user_data["preprocess_done"] = True
+        except Exception:
+            pass
+
+    if context.user_data.get("preprocess_done"):
+        summary_lines.append("\nתמלול הושלם ברקע -- מוכן לעיבוד.")
+    else:
+        summary_lines.append("\nתמלול עדיין רץ ברקע -- העיבוד ימשיך כשיסיים.")
+
+    keyboard = [
+        [InlineKeyboardButton("מאשר (Confirm)", callback_data="confirm:yes")],
+        [InlineKeyboardButton("ביטול (Cancel)", callback_data="confirm:cancel")],
+    ]
+    await message.reply_text(
+        "סיכום:\n" + "\n".join(summary_lines),
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return WAITING_CONFIRM
+
+
+async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle confirmation — start processing."""
+    query = update.callback_query
+    await query.answer()
+
+    value = query.data.replace("confirm:", "")
+    if value == "cancel":
+        await query.edit_message_text("בוטל.")
+        _cleanup_conversation(context)
+        return ConversationHandler.END
+
+    await query.edit_message_text("מאושר. מתחיל עיבוד...")
+
     # Build user_requests
     purpose = context.user_data.get("purpose", "")
-    output_format = context.user_data["output_format"]
-    user_requests = f"{output_format}: {purpose}" if purpose else f"{output_format}: full analysis"
+    output_format = context.user_data.get("output_format", "standard")
+    extra = context.user_data.get("extra_context", [])
+
+    parts = [output_format]
+    if purpose:
+        parts.append(purpose)
+    if extra:
+        parts.extend(extra)
+    user_requests = ": ".join(parts[:2])
+    if extra:
+        user_requests += "\n\nAdditional context from user:\n" + "\n".join(extra)
+    if not purpose and not extra:
+        user_requests = f"{output_format}: full analysis"
 
     file_path = context.user_data["file_path"]
     file_name = context.user_data["file_name"]
@@ -442,11 +740,32 @@ async def handle_format_choice(update: Update, context: ContextTypes.DEFAULT_TYP
     status_msg = context.user_data["status_msg"]
     telegram_id = update.effective_user.id
 
+    # Wait for preprocess if not done
+    preprocess_task = context.user_data.get("preprocess_task")
+    hebrew_ai_text = context.user_data.get("hebrew_ai_text", "")
+    gemini_text = context.user_data.get("gemini_text", "")
+
+    if preprocess_task and not context.user_data.get("preprocess_done"):
+        await status_msg.edit_text(
+            f"[>] Processing: {file_name}\n"
+            f"    Waiting for transcription to complete..."
+        )
+        try:
+            hebrew_ai_text, gemini_text = await preprocess_task
+            context.user_data["hebrew_ai_text"] = hebrew_ai_text
+            context.user_data["gemini_text"] = gemini_text
+        except Exception as e:
+            logger.error(f"Preprocess failed: {e}")
+            hebrew_ai_text = ""
+            gemini_text = ""
+
     try:
         await _process_and_reply(
             status_msg, file_path, file_name, user,
             session_type, speakers, language,
             user_requests, telegram_id,
+            hebrew_ai_text=hebrew_ai_text,
+            gemini_text=gemini_text,
         )
     except Exception as e:
         logger.error(f"Error processing file from {telegram_id}: {e}")
@@ -468,7 +787,7 @@ async def handle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle conversation timeout — clean up temp files."""
+    """Handle conversation timeout -- clean up temp files."""
     _cleanup_conversation(context)
     return ConversationHandler.END
 
@@ -613,6 +932,13 @@ def main():
             ],
             WAITING_FORMAT: [
                 CallbackQueryHandler(handle_format_choice, pattern=r"^format:"),
+            ],
+            WAITING_CONVERSATION: [
+                CallbackQueryHandler(handle_conversation_done, pattern=r"^conversation:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_conversation_text),
+            ],
+            WAITING_CONFIRM: [
+                CallbackQueryHandler(handle_confirm, pattern=r"^confirm:"),
             ],
             ConversationHandler.TIMEOUT: [
                 MessageHandler(filters.ALL, handle_timeout),

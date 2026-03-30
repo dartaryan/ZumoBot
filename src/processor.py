@@ -44,25 +44,42 @@ def analyze_transcript(
     language: str = "he",
     model: str = SONNET_MODEL,
     user_requests: str = "full analysis",
+    gemini_text: str = "",
 ) -> str:
     """Full structured analysis using the Zumo Bot agent prompt.
 
-    Uses zumo-bot-agent.md as the system prompt. The agent expects a specific
-    input format with metadata header + transcript body.
-    Returns empty string if no api_key.
+    Uses zumo-bot-agent.md as the system prompt. Supports dual-source mode
+    when gemini_text is provided (Hebrew AI for accurate text, Gemini for
+    speaker diarization). Returns empty string if no api_key.
     """
     if not api_key:
         return ""
 
-    user_message = (
-        f"Session Type: {session_type}\n"
-        f"Speakers: {speakers or 'Not specified'}\n"
-        f"Language: {language}\n"
-        f"User Requests: {user_requests}\n"
-        f"\n"
-        f"--- TRANSCRIPT ---\n"
-        f"{transcript_text[:100000]}"
-    )
+    if gemini_text:
+        # Dual-source mode: Hebrew AI + Gemini
+        user_message = (
+            f"Session Type: {session_type}\n"
+            f"Speakers: {speakers or 'Not specified'}\n"
+            f"Language: {language}\n"
+            f"User Requests: {user_requests}\n"
+            f"\n"
+            f"--- HEBREW AI TRANSCRIPT (accurate text, no speaker labels) ---\n"
+            f"{transcript_text[:100000]}\n"
+            f"\n"
+            f"--- GEMINI TRANSCRIPT (speaker labels, may contain errors) ---\n"
+            f"{gemini_text[:100000]}"
+        )
+    else:
+        # Single-source mode (fallback)
+        user_message = (
+            f"Session Type: {session_type}\n"
+            f"Speakers: {speakers or 'Not specified'}\n"
+            f"Language: {language}\n"
+            f"User Requests: {user_requests}\n"
+            f"\n"
+            f"--- TRANSCRIPT ---\n"
+            f"{transcript_text[:100000]}"
+        )
 
     client = Anthropic(api_key=api_key)
     response = client.messages.create(

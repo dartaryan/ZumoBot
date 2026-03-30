@@ -16,6 +16,8 @@ if sys.platform == "win32":
 from datetime import datetime
 from pathlib import Path
 
+from concurrent.futures import ThreadPoolExecutor
+
 from src.config import (
     OUTPUT_DIR,
     SESSION_TYPES,
@@ -24,7 +26,7 @@ from src.config import (
 )
 from src.users import load_user
 from src.audio import (
-    compress_audio,
+    compress_for_upload,
     extract_audio,
     format_duration,
     get_duration,
@@ -33,6 +35,7 @@ from src.audio import (
     remove_silence,
 )
 from src.transcriber import transcribe
+from src.gemini_transcriber import transcribe_with_diarization
 from src.processor import analyze_transcript, generate_summary
 from src.formatter import (
     format_analysis_md,
@@ -40,7 +43,6 @@ from src.formatter import (
     generate_folder_name,
 )
 from src.downloader import download_zoom_recording, is_zoom_url
-from src.diarizer import is_available as diarizer_available, diarize, align_transcript
 from src.storage import (
     ensure_repo_structure,
     save_session,
@@ -60,14 +62,15 @@ def process_file(
     skip_diarization: bool = False,
     zoom_vtt_path: Path | None = None,
     user_requests: str = "full analysis",
+    gemini_api_key: str | None = None,
 ) -> dict:
-    """Main pipeline: audio -> transcribe -> analyze -> save."""
+    """Main pipeline: audio -> compress -> dual transcribe -> analyze -> save."""
 
     result = {"status": "error", "error": None}
     timestamp = datetime.now()
 
     print(f"\n{'=' * 60}")
-    print(f"Zumo Pipeline")
+    print(f"Zumo Pipeline v2")
     print(f"  User:    {user.name}")
     print(f"  File:    {file_path.name}")
     print(f"  Type:    {session_type}")
@@ -105,86 +108,93 @@ def process_file(
             print(f"  Removed {format_duration(silence_removed)} of silence.")
             print(f"  Trimmed duration: {format_duration(trimmed_duration)}")
 
-            # --- Step 3: Speaker Diarization ---
-            diarization_segments = None
-            speaker_names = [s.strip() for s in speakers.split(",") if s.strip()] if speakers else []
+            # --- Step 3: Compress for upload ---
+            print("\n[3/8] Compressing audio for upload...")
+            upload_path = tmp / "compressed.mp3"
+            compress_for_upload(trimmed_path, upload_path)
+            compressed_size_mb = upload_path.stat().st_size / 1024 / 1024
+            print(f"  Compressed to {compressed_size_mb:.1f}MB")
 
-            if skip_diarization:
-                print("\n[3/8] Skipping speaker diarization (--skip-diarization).")
-            elif not diarizer_available():
-                print("\n[3/8] Skipping diarization (pyannote.audio not installed).")
-                print("  Install: pip install pyannote.audio")
-            else:
-                try:
-                    print("\n[3/8] Running speaker diarization...")
-                    num_speakers = len(speaker_names) if speaker_names else None
-                    diarization_segments = diarize(
-                        trimmed_path,
-                        num_speakers=num_speakers,
-                        on_progress=lambda msg: print(f"  {msg}"),
-                    )
-                except Exception as e:
-                    print(f"  Diarization failed, continuing without: {e}")
-                    diarization_segments = None
-
-            # --- Step 3.5: Compress if too large ---
-            trimmed_size_mb = trimmed_path.stat().st_size / 1024 / 1024
-            if trimmed_size_mb > 25:
-                print(f"\n[3.5/8] Compressing audio ({trimmed_size_mb:.0f}MB > 25MB limit)...")
-                upload_path = tmp / "compressed.mp3"
-                compress_audio(trimmed_path, upload_path)
-                compressed_size_mb = upload_path.stat().st_size / 1024 / 1024
-                print(f"  Compressed: {trimmed_size_mb:.0f}MB -> {compressed_size_mb:.1f}MB")
-            else:
-                upload_path = trimmed_path
-
-            # --- Step 4: Transcription ---
+            # --- Step 4: Dual transcription (parallel) ---
             if not user.hebrew_ai_api_key:
                 raise ValueError("hebrew_ai_api_key is not configured. Check ZUMO_USER_HEBREW_AI_KEY env var.")
-            print(f"\n[4/8] Transcribing via Hebrew AI ({language})...")
-            text, api_duration = transcribe(
-                upload_path,
-                user.hebrew_ai_api_key,
-                language,
-                on_progress=lambda msg: print(f"  {msg}"),
-            )
-            print(f"  Transcription complete ({len(text)} characters).")
 
-            # --- Step 5: Align speakers with transcript ---
-            if zoom_vtt_path and zoom_vtt_path.exists():
+            print(f"\n[4/8] Dual transcription (Hebrew AI + Gemini Flash)...")
+
+            hebrew_ai_text = ""
+            gemini_text = ""
+
+            # Resolve Gemini API key
+            _gemini_key = gemini_api_key or os.getenv("GEMINI_API_KEY", "")
+
+            def _run_hebrew_ai():
+                t, _ = transcribe(
+                    upload_path,
+                    user.hebrew_ai_api_key,
+                    language,
+                    on_progress=lambda msg: print(f"  [Hebrew AI] {msg}"),
+                )
+                return t
+
+            def _run_gemini():
+                if not _gemini_key:
+                    print("  [Gemini] Skipping — GEMINI_API_KEY not set.")
+                    return ""
+                return transcribe_with_diarization(
+                    upload_path,
+                    api_key=_gemini_key,
+                    on_progress=lambda msg: print(f"  [Gemini] {msg}"),
+                )
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                future_hebrew = pool.submit(_run_hebrew_ai)
+                future_gemini = pool.submit(_run_gemini)
+
+                try:
+                    hebrew_ai_text = future_hebrew.result()
+                    print(f"  [Hebrew AI] Complete ({len(hebrew_ai_text)} chars)")
+                except Exception as e:
+                    print(f"  [Hebrew AI] Failed: {e}")
+                    raise
+
+                try:
+                    gemini_text = future_gemini.result()
+                    print(f"  [Gemini] Complete ({len(gemini_text)} chars)")
+                except Exception as e:
+                    print(f"  [Gemini] Failed, continuing without diarization: {e}")
+                    gemini_text = ""
+
+            # --- Step 5: Zoom VTT fallback ---
+            if zoom_vtt_path and zoom_vtt_path.exists() and not gemini_text:
                 print(f"\n[5/8] Aligning speakers from Zoom VTT: {zoom_vtt_path.name}")
                 try:
                     from src.vtt_align import align_with_zoom_vtt
-                    text = align_with_zoom_vtt(text, zoom_vtt_path)
-                    print(f"  Speaker-aligned transcript: {len(text)} characters.")
+                    hebrew_ai_text = align_with_zoom_vtt(hebrew_ai_text, zoom_vtt_path)
+                    print(f"  Speaker-aligned transcript: {len(hebrew_ai_text)} characters.")
                 except Exception as e:
                     print(f"  VTT alignment failed, using raw transcript: {e}")
-            elif diarization_segments:
-                print("\n[5/8] Aligning speakers with transcript...")
-                text = align_transcript(
-                    text,
-                    diarization_segments,
-                    trimmed_duration,
-                    speaker_names=speaker_names or None,
-                )
-                print(f"  Diarized transcript: {len(text)} characters.")
             else:
-                print("\n[5/8] No diarization data, using raw transcript.")
+                print("\n[5/8] Speaker diarization via Gemini (passed to Claude).")
 
             # --- Step 6: Summary ---
             print("\n[6/8] Generating summary...")
-            summary = generate_summary(text, user.anthropic_api_key)
+            summary = generate_summary(hebrew_ai_text, user.anthropic_api_key)
             print(f"  Summary: {summary}")
 
-            # --- Step 7: Analysis ---
+            # --- Step 7: Analysis (Claude synthesis) ---
             if skip_analysis or not user.anthropic_api_key:
                 print("\n[7/8] Skipping analysis.")
                 analysis = None
             else:
-                print("\n[7/8] Analyzing transcript via Claude...")
+                print("\n[7/8] Claude synthesis (merging dual transcriptions)...")
                 analysis = analyze_transcript(
-                    text, user.anthropic_api_key, session_type, speakers, language,
+                    hebrew_ai_text,
+                    user.anthropic_api_key,
+                    session_type,
+                    speakers,
+                    language,
                     user_requests=user_requests,
+                    gemini_text=gemini_text,
                 )
                 print(f"  Analysis complete ({len(analysis)} characters).")
 
@@ -195,7 +205,7 @@ def process_file(
             )
 
             transcript_md = format_transcript_md(
-                text, file_path.stem, session_type, speakers, language,
+                hebrew_ai_text, file_path.stem, session_type, speakers, language,
                 original_duration, trimmed_duration, silence_removed, timestamp,
             )
 
@@ -231,7 +241,7 @@ def process_file(
 
             result["status"] = "success"
             result["folder_name"] = folder_name
-            result["transcript_length"] = len(text)
+            result["transcript_length"] = len(hebrew_ai_text)
             result["original_duration"] = original_duration
             result["trimmed_duration"] = trimmed_duration
 
