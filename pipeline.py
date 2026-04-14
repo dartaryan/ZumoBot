@@ -128,6 +128,7 @@ def process_file(
             hebrew_ai_text = ""
             gemini_text = ""
             hebrew_ai_error: str | None = None
+            gemini_error: str | None = None
 
             def _run_hebrew_ai():
                 t, _ = transcribe(
@@ -166,8 +167,12 @@ def process_file(
                     gemini_text = future_gemini.result()
                     print(f"  [Gemini] Complete ({len(gemini_text)} chars)")
                 except Exception as e:
-                    print(f"  [Gemini] Failed: {e}")
+                    gemini_error = f"{type(e).__name__}: {e}"
+                    print(f"  [Gemini] Failed: {gemini_error}")
                     gemini_text = ""
+
+            if not _gemini_key:
+                gemini_error = "GEMINI_API_KEY not set"
 
             # Pick primary transcript — Hebrew AI first, Gemini as fallback
             if hebrew_ai_text:
@@ -181,7 +186,9 @@ def process_file(
                 print(f"  [!] Hebrew AI unavailable — proceeding with Gemini only.")
             else:
                 raise RuntimeError(
-                    f"Both transcribers failed. Hebrew AI: {hebrew_ai_error or 'n/a'}"
+                    f"Both transcribers failed.\n"
+                    f"  Hebrew AI: {hebrew_ai_error or 'n/a'}\n"
+                    f"  Gemini: {gemini_error or 'n/a'}"
                 )
 
             result["transcriber_used"] = transcriber_used
