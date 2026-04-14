@@ -9,7 +9,7 @@ from google.genai import types
 
 from .config import GEMINI_API_KEY
 
-GEMINI_MODEL = "gemini-3.1-pro-preview"
+GEMINI_MODEL = "gemini-3-flash-preview"
 
 DIARIZATION_PROMPT = (
     "Transcribe this audio file. Identify different speakers and label them as Speaker A, Speaker B, etc.\n"

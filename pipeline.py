@@ -123,7 +123,7 @@ def process_file(
                     "No transcriber configured. Set ZUMO_USER_HEBREW_AI_KEY or GEMINI_API_KEY."
                 )
 
-            print(f"\n[4/8] Dual transcription (Hebrew AI + Gemini Pro)...")
+            print(f"\n[4/8] Dual transcription (Hebrew AI + Gemini Flash)...")
 
             hebrew_ai_text = ""
             gemini_text = ""
