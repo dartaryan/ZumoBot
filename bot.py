@@ -295,7 +295,7 @@ async def _process_and_reply(
     )
 
     try:
-        if hebrew_ai_text:
+        if hebrew_ai_text or gemini_text:
             # We already have transcriptions — run analysis directly
             from src.processor import analyze_transcript, generate_summary
             from src.formatter import format_analysis_md, format_transcript_md, generate_folder_name
@@ -303,21 +303,30 @@ async def _process_and_reply(
             from src.audio import get_duration
             from datetime import datetime
 
+            if hebrew_ai_text:
+                primary_text = hebrew_ai_text
+                side_gemini_text = gemini_text
+                transcriber_used = "both" if gemini_text else "hebrew-ai"
+            else:
+                primary_text = gemini_text
+                side_gemini_text = ""
+                transcriber_used = "gemini-only"
+
             loop = asyncio.get_event_loop()
 
             original_duration = await loop.run_in_executor(None, lambda: get_duration(file_path))
             timestamp = datetime.now()
 
             summary = await loop.run_in_executor(
-                None, lambda: generate_summary(hebrew_ai_text, user.anthropic_api_key)
+                None, lambda: generate_summary(primary_text, user.anthropic_api_key)
             )
 
             analysis = await loop.run_in_executor(
                 None, lambda: analyze_transcript(
-                    hebrew_ai_text, user.anthropic_api_key,
+                    primary_text, user.anthropic_api_key,
                     session_type, speakers, language,
                     user_requests=user_requests,
-                    gemini_text=gemini_text,
+                    gemini_text=side_gemini_text,
                 )
             )
 
@@ -325,7 +334,7 @@ async def _process_and_reply(
                 session_type, speakers or file_path.stem, timestamp,
             )
             transcript_md = format_transcript_md(
-                hebrew_ai_text, file_path.stem, session_type, speakers, language,
+                primary_text, file_path.stem, session_type, speakers, language,
                 original_duration, original_duration, 0, timestamp,
             )
             analysis_md = format_analysis_md(
@@ -345,9 +354,10 @@ async def _process_and_reply(
             result = {
                 "status": "success",
                 "folder_name": folder_name,
-                "transcript_length": len(hebrew_ai_text),
+                "transcript_length": len(primary_text),
                 "original_duration": original_duration,
                 "dashboard_url": dashboard_url,
+                "transcriber_used": transcriber_used,
             }
         else:
             # Fallback: run the full pipeline
@@ -376,8 +386,17 @@ async def _process_and_reply(
         chars = result.get("transcript_length", 0)
         link = result.get("dashboard_url", "")
 
+        fallback_note = ""
+        if result.get("transcriber_used") == "gemini-only":
+            reason = result.get("fallback_reason", "")
+            fallback_note = (
+                "\n[!] תמלול נעשה ב-Gemini בלבד "
+                "(Hebrew AI לא זמין"
+                f"{': ' + reason[:100] if reason else ''})\n"
+            )
+
         await status_msg.edit_text(
-            f"[=] Done\n\n"
+            f"[=] Done{fallback_note}\n\n"
             f"Duration: {duration_str}\n"
             f"Transcript: {chars:,} characters\n"
             f"Folder: {result.get('folder_name', '')}\n\n"
@@ -876,8 +895,17 @@ async def handle_zoom_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chars = result.get("transcript_length", 0)
                 link = result.get("dashboard_url", "")
 
+                fallback_note = ""
+                if result.get("transcriber_used") == "gemini-only":
+                    reason = result.get("fallback_reason", "")
+                    fallback_note = (
+                        "\n[!] תמלול נעשה ב-Gemini בלבד "
+                        "(Hebrew AI לא זמין"
+                        f"{': ' + reason[:100] if reason else ''})\n"
+                    )
+
                 await status_msg.edit_text(
-                    f"[=] Done\n\n"
+                    f"[=] Done{fallback_note}\n\n"
                     f"Duration: {duration_str}\n"
                     f"Transcript: {chars:,} characters\n"
                     f"Folder: {result.get('folder_name', '')}\n\n"

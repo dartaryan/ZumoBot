@@ -116,16 +116,18 @@ def process_file(
             print(f"  Compressed to {compressed_size_mb:.1f}MB")
 
             # --- Step 4: Dual transcription (parallel) ---
-            if not user.hebrew_ai_api_key:
-                raise ValueError("hebrew_ai_api_key is not configured. Check ZUMO_USER_HEBREW_AI_KEY env var.")
+            _gemini_key = gemini_api_key or os.getenv("GEMINI_API_KEY", "")
 
-            print(f"\n[4/8] Dual transcription (Hebrew AI + Gemini Flash)...")
+            if not user.hebrew_ai_api_key and not _gemini_key:
+                raise ValueError(
+                    "No transcriber configured. Set ZUMO_USER_HEBREW_AI_KEY or GEMINI_API_KEY."
+                )
+
+            print(f"\n[4/8] Dual transcription (Hebrew AI + Gemini Pro)...")
 
             hebrew_ai_text = ""
             gemini_text = ""
-
-            # Resolve Gemini API key
-            _gemini_key = gemini_api_key or os.getenv("GEMINI_API_KEY", "")
+            hebrew_ai_error: str | None = None
 
             def _run_hebrew_ai():
                 t, _ = transcribe(
@@ -147,30 +149,52 @@ def process_file(
                 )
 
             with ThreadPoolExecutor(max_workers=2) as pool:
-                future_hebrew = pool.submit(_run_hebrew_ai)
+                future_hebrew = pool.submit(_run_hebrew_ai) if user.hebrew_ai_api_key else None
                 future_gemini = pool.submit(_run_gemini)
 
-                try:
-                    hebrew_ai_text = future_hebrew.result()
-                    print(f"  [Hebrew AI] Complete ({len(hebrew_ai_text)} chars)")
-                except Exception as e:
-                    print(f"  [Hebrew AI] Failed: {e}")
-                    raise
+                if future_hebrew is not None:
+                    try:
+                        hebrew_ai_text = future_hebrew.result()
+                        print(f"  [Hebrew AI] Complete ({len(hebrew_ai_text)} chars)")
+                    except Exception as e:
+                        hebrew_ai_error = str(e)
+                        print(f"  [Hebrew AI] Failed: {e}")
+                else:
+                    hebrew_ai_error = "hebrew_ai_api_key not configured"
 
                 try:
                     gemini_text = future_gemini.result()
                     print(f"  [Gemini] Complete ({len(gemini_text)} chars)")
                 except Exception as e:
-                    print(f"  [Gemini] Failed, continuing without diarization: {e}")
+                    print(f"  [Gemini] Failed: {e}")
                     gemini_text = ""
 
+            # Pick primary transcript — Hebrew AI first, Gemini as fallback
+            if hebrew_ai_text:
+                primary_text = hebrew_ai_text
+                side_gemini_text = gemini_text
+                transcriber_used = "both" if gemini_text else "hebrew-ai"
+            elif gemini_text:
+                primary_text = gemini_text
+                side_gemini_text = ""  # avoid passing Gemini twice to Claude
+                transcriber_used = "gemini-only"
+                print(f"  [!] Hebrew AI unavailable — proceeding with Gemini only.")
+            else:
+                raise RuntimeError(
+                    f"Both transcribers failed. Hebrew AI: {hebrew_ai_error or 'n/a'}"
+                )
+
+            result["transcriber_used"] = transcriber_used
+            if transcriber_used == "gemini-only":
+                result["fallback_reason"] = hebrew_ai_error or "Hebrew AI unavailable"
+
             # --- Step 5: Zoom VTT fallback ---
-            if zoom_vtt_path and zoom_vtt_path.exists() and not gemini_text:
+            if zoom_vtt_path and zoom_vtt_path.exists() and not side_gemini_text and transcriber_used != "gemini-only":
                 print(f"\n[5/8] Aligning speakers from Zoom VTT: {zoom_vtt_path.name}")
                 try:
                     from src.vtt_align import align_with_zoom_vtt
-                    hebrew_ai_text = align_with_zoom_vtt(hebrew_ai_text, zoom_vtt_path)
-                    print(f"  Speaker-aligned transcript: {len(hebrew_ai_text)} characters.")
+                    primary_text = align_with_zoom_vtt(primary_text, zoom_vtt_path)
+                    print(f"  Speaker-aligned transcript: {len(primary_text)} characters.")
                 except Exception as e:
                     print(f"  VTT alignment failed, using raw transcript: {e}")
             else:
@@ -178,7 +202,7 @@ def process_file(
 
             # --- Step 6: Summary ---
             print("\n[6/8] Generating summary...")
-            summary = generate_summary(hebrew_ai_text, user.anthropic_api_key)
+            summary = generate_summary(primary_text, user.anthropic_api_key)
             print(f"  Summary: {summary}")
 
             # --- Step 7: Analysis (Claude synthesis) ---
@@ -188,13 +212,13 @@ def process_file(
             else:
                 print("\n[7/8] Claude synthesis (merging dual transcriptions)...")
                 analysis = analyze_transcript(
-                    hebrew_ai_text,
+                    primary_text,
                     user.anthropic_api_key,
                     session_type,
                     speakers,
                     language,
                     user_requests=user_requests,
-                    gemini_text=gemini_text,
+                    gemini_text=side_gemini_text,
                 )
                 print(f"  Analysis complete ({len(analysis)} characters).")
 
@@ -205,7 +229,7 @@ def process_file(
             )
 
             transcript_md = format_transcript_md(
-                hebrew_ai_text, file_path.stem, session_type, speakers, language,
+                primary_text, file_path.stem, session_type, speakers, language,
                 original_duration, trimmed_duration, silence_removed, timestamp,
             )
 
@@ -241,7 +265,7 @@ def process_file(
 
             result["status"] = "success"
             result["folder_name"] = folder_name
-            result["transcript_length"] = len(hebrew_ai_text)
+            result["transcript_length"] = len(primary_text)
             result["original_duration"] = original_duration
             result["trimmed_duration"] = trimmed_duration
 
