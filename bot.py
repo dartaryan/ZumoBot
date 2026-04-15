@@ -65,6 +65,7 @@ _CONVERSATION_KEYS = [
     "status_msg", "session_type", "speakers", "purpose", "output_format",
     "extra_context", "gemini_text", "hebrew_ai_text",
     "preprocess_task", "preprocess_done",
+    "proceed_started", "confirm_started", "last_prompt_msg_id",
 ]
 
 
@@ -141,7 +142,7 @@ async def _download_file(file_obj, file_size, msg, status_msg, file_path):
 
     if file_size > MAX_BOT_API_SIZE:
         size_mb = file_size / (1024 * 1024)
-        await status_msg.edit_text(f"[>] Large file ({size_mb:.1f} MB) -- downloading via MTProto...")
+        await status_msg.edit_text(f"⏳ Large file ({size_mb:.1f} MB) — downloading via MTProto...")
         try:
             from src.telegram_downloader import download_large_file
 
@@ -152,7 +153,7 @@ async def _download_file(file_obj, file_size, msg, status_msg, file_path):
                 dest_path=file_path,
             )
         except RuntimeError as e:
-            await status_msg.edit_text(f"[x] Large file download failed:\n{str(e)}")
+            await status_msg.edit_text(f"❌ Large file download failed:\n{str(e)}")
             return False
     else:
         tg_file = await file_obj.get_file()
@@ -180,7 +181,7 @@ async def _progress_ticker(status_msg, file_name, session_type):
             time_str = f"{mins}:{secs:02d}" if mins else f"{secs}s"
             try:
                 await status_msg.edit_text(
-                    f"[>] Processing: {file_name}\n"
+                    f"⏳ Processing: {file_name}\n"
                     f"    Type: {session_type}\n"
                     f"    Stage: {stage}...\n"
                     f"    Elapsed: {time_str}"
@@ -285,7 +286,7 @@ async def _process_and_reply(
     skip the transcription steps and go straight to analysis.
     """
     await status_msg.edit_text(
-        f"[>] Processing: {file_name}\n"
+        f"⏳ Processing: {file_name}\n"
         f"    Type: {session_type}\n"
         f"    Starting pipeline..."
     )
@@ -317,18 +318,32 @@ async def _process_and_reply(
             original_duration = await loop.run_in_executor(None, lambda: get_duration(file_path))
             timestamp = datetime.now()
 
-            summary = await loop.run_in_executor(
-                None, lambda: generate_summary(primary_text, user.anthropic_api_key)
-            )
-
-            analysis = await loop.run_in_executor(
-                None, lambda: analyze_transcript(
-                    primary_text, user.anthropic_api_key,
-                    session_type, speakers, language,
-                    user_requests=user_requests,
-                    gemini_text=side_gemini_text,
+            # Summary — non-fatal if it fails
+            try:
+                summary = await loop.run_in_executor(
+                    None, lambda: generate_summary(primary_text, user.anthropic_api_key)
                 )
-            )
+            except Exception as e:
+                logger.error(f"Summary generation failed: {e}")
+                summary = ""
+
+            # Analysis — non-fatal. On failure we still publish transcript-only.
+            analysis = None
+            analysis_error = ""
+            try:
+                analysis = await loop.run_in_executor(
+                    None, lambda: analyze_transcript(
+                        primary_text, user.anthropic_api_key,
+                        session_type, speakers, language,
+                        user_requests=user_requests,
+                        gemini_text=side_gemini_text,
+                    )
+                )
+            except Exception as e:
+                analysis_error = str(e)
+                logger.error(f"Analysis failed, publishing transcript-only: {e}")
+
+            analysis_failed = not analysis  # covers exception AND empty/None
 
             folder_name = generate_folder_name(
                 session_type, speakers or file_path.stem, timestamp,
@@ -358,6 +373,8 @@ async def _process_and_reply(
                 "original_duration": original_duration,
                 "dashboard_url": dashboard_url,
                 "transcriber_used": transcriber_used,
+                "analysis_failed": analysis_failed,
+                "analysis_error": analysis_error,
             }
         else:
             # Fallback: run the full pipeline
@@ -386,24 +403,44 @@ async def _process_and_reply(
         chars = result.get("transcript_length", 0)
         link = result.get("dashboard_url", "")
 
-        fallback_note = ""
+        notes = []
         if result.get("transcriber_used") == "gemini-only":
             reason = result.get("fallback_reason", "")
-            fallback_note = (
-                "\n[!] תמלול נעשה ב-Gemini בלבד "
-                "(Hebrew AI לא זמין"
-                f"{': ' + reason[:100] if reason else ''})\n"
-            )
+            note = "⚠️ תמלול נעשה ב-Gemini בלבד (Hebrew AI לא זמין"
+            if reason:
+                note += f": {reason[:100]}"
+            note += ")"
+            notes.append(note)
+        if result.get("analysis_failed"):
+            reason = result.get("analysis_error", "")
+            note = "⚠️ ניתוח נכשל — תמלול בלבד זמין בעמוד"
+            if reason:
+                note += f" ({reason[:100]})"
+            notes.append(note)
 
-        await status_msg.edit_text(
-            f"[=] Done{fallback_note}\n\n"
-            f"Duration: {duration_str}\n"
-            f"Transcript: {chars:,} characters\n"
-            f"Folder: {result.get('folder_name', '')}\n\n"
-            f"{link}"
+        head = "🎉 הסתיים" if not notes else "✅ הסתיים עם הערות"
+        summary_text = (
+            f"{head}\n"
+            + ("\n".join(notes) + "\n\n" if notes else "\n")
+            + f"Duration: {duration_str}\n"
+            + f"Transcript: {chars:,} characters\n"
+            + f"Folder: {result.get('folder_name', '')}\n\n"
+            + f"{link}"
         )
+
+        try:
+            await status_msg.edit_text(head)
+        except Exception:
+            pass
+        # Send a NEW message so Telegram fires a push notification
+        await status_msg.reply_text(summary_text)
     else:
-        await status_msg.edit_text(f"[x] Error:\n{result.get('error', 'Unknown')[:500]}")
+        err = result.get("error", "Unknown")[:500]
+        try:
+            await status_msg.edit_text("❌ נכשל")
+        except Exception:
+            pass
+        await status_msg.reply_text(f"❌ Error:\n{err}")
 
 
 # ---------------------------------------------------------------------------
@@ -435,7 +472,7 @@ async def handle_file_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_info:
         diag = diagnose_telegram_id(telegram_id)
         if diag:
-            await update.message.reply_text(f"[!] {diag}")
+            await update.message.reply_text(f"⚠️ {diag}")
         else:
             await update.message.reply_text(
                 f"Access denied. Your Telegram ID is not registered.\n"
@@ -457,7 +494,7 @@ async def handle_file_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     language = meta["language"] or user.default_language
     file_size = file_obj.file_size or 0
 
-    status_msg = await msg.reply_text("[>] Downloading file...")
+    status_msg = await msg.reply_text("⏳ Downloading file...")
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="zumo-tg-"))
     file_path = tmp_dir / file_name
@@ -478,7 +515,11 @@ async def handle_file_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Error processing file from {telegram_id}: {e}")
             try:
-                await status_msg.edit_text(f"[x] Error:\n{str(e)[:500]}")
+                await status_msg.edit_text("❌ נכשל")
+            except Exception:
+                pass
+            try:
+                await status_msg.reply_text(f"❌ Error:\n{str(e)[:500]}")
             except Exception:
                 pass
         finally:
@@ -500,8 +541,8 @@ async def handle_file_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["preprocess_done"] = False
 
     await status_msg.edit_text(
-        "[OK] File downloaded.\n"
-        "[>] Starting transcription in background..."
+        "✅ File downloaded.\n"
+        "⏳ Starting transcription in background..."
     )
 
     # Start preprocessing (compression + dual transcription) in background
@@ -633,17 +674,24 @@ async def handle_format_choice(update: Update, context: ContextTypes.DEFAULT_TYP
     keyboard = [
         [InlineKeyboardButton("המשך (Continue)", callback_data="conversation:done")],
     ]
-    await query.message.reply_text(
+    prompt = await query.message.reply_text(
         "יש משהו נוסף שחשוב לי לדעת על השיחה הזאת?\n"
         "אפשר לכתוב הקשר, רקע, או בקשות מיוחדות.\n"
         "או לחץ המשך.",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
+    context.user_data["last_prompt_msg_id"] = prompt.message_id
     return WAITING_CONVERSATION
 
 
 async def handle_conversation_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle free-text additional context from user."""
+    """Handle free-text additional context from user.
+
+    Long texts that Telegram splits into multiple messages arrive as separate
+    updates. To avoid showing multiple live "המשך" buttons (which can spawn
+    parallel pipelines if pressed), we strip the previous prompt's buttons
+    before sending a new one.
+    """
     text = update.message.text.strip()
 
     # Check for "done" signals
@@ -654,19 +702,41 @@ async def handle_conversation_text(update: Update, context: ContextTypes.DEFAULT
     # Accumulate context
     context.user_data.setdefault("extra_context", []).append(text)
 
+    # Remove the previous "המשך" button so only the newest one is live
+    prev_id = context.user_data.get("last_prompt_msg_id")
+    if prev_id:
+        try:
+            await context.bot.edit_message_reply_markup(
+                chat_id=update.effective_chat.id,
+                message_id=prev_id,
+                reply_markup=None,
+            )
+        except Exception:
+            pass
+
     keyboard = [
         [InlineKeyboardButton("זהו, המשך (Done)", callback_data="conversation:done")],
     ]
-    await update.message.reply_text(
+    prompt = await update.message.reply_text(
         "קיבלתי. עוד משהו? או לחץ המשך.",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
+    context.user_data["last_prompt_msg_id"] = prompt.message_id
     return WAITING_CONVERSATION
 
 
 async def handle_conversation_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle conversation done button."""
+    """Handle conversation done button.
+
+    Idempotent: if the flow already advanced (e.g. user double-clicked, or
+    pressed multiple live buttons from split messages), silently toast and
+    return instead of triggering _proceed_to_confirm again.
+    """
     query = update.callback_query
+    if context.user_data.get("proceed_started"):
+        await query.answer(text="⏳ כבר בעיבוד", show_alert=False)
+        return WAITING_CONFIRM
+    context.user_data["proceed_started"] = True
     await query.answer()
     await query.edit_message_text("ממשיכים...")
     return await _proceed_to_confirm(query.message, context)
@@ -722,15 +792,26 @@ async def _proceed_to_confirm(message, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle confirmation — start processing."""
+    """Handle confirmation — start processing.
+
+    Idempotent on "yes": second click answers with toast and returns, so a
+    double-tap or a lingering button from a retried flow cannot spawn a
+    second pipeline.
+    """
     query = update.callback_query
-    await query.answer()
 
     value = query.data.replace("confirm:", "")
     if value == "cancel":
+        await query.answer()
         await query.edit_message_text("בוטל.")
         _cleanup_conversation(context)
         return ConversationHandler.END
+
+    if context.user_data.get("confirm_started"):
+        await query.answer(text="⏳ כבר בעיבוד", show_alert=False)
+        return ConversationHandler.END
+    context.user_data["confirm_started"] = True
+    await query.answer()
 
     await query.edit_message_text("מאושר. מתחיל עיבוד...")
 
@@ -766,7 +847,7 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if preprocess_task and not context.user_data.get("preprocess_done"):
         await status_msg.edit_text(
-            f"[>] Processing: {file_name}\n"
+            f"⏳ Processing: {file_name}\n"
             f"    Waiting for transcription to complete..."
         )
         try:
@@ -789,7 +870,11 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error processing file from {telegram_id}: {e}")
         try:
-            await status_msg.edit_text(f"[x] Error:\n{str(e)[:500]}")
+            await status_msg.edit_text("❌ נכשל")
+        except Exception:
+            pass
+        try:
+            await status_msg.reply_text(f"❌ Error:\n{str(e)[:500]}")
         except Exception:
             pass
     finally:
@@ -819,7 +904,7 @@ async def handle_zoom_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_info:
         diag = diagnose_telegram_id(telegram_id)
         if diag:
-            await update.message.reply_text(f"[!] {diag}")
+            await update.message.reply_text(f"⚠️ {diag}")
         else:
             await update.message.reply_text(
                 f"Access denied. Your Telegram ID is not registered.\n"
@@ -836,7 +921,7 @@ async def handle_zoom_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     language = user.default_language
 
     for url in urls:
-        status_msg = await update.message.reply_text("[>] Downloading Zoom recording...")
+        status_msg = await update.message.reply_text("⏳ Downloading Zoom recording...")
 
         tmp_dir = None
         try:
@@ -871,7 +956,7 @@ async def handle_zoom_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             vtt_path = zoom_files.get("transcript")
 
             await status_msg.edit_text(
-                "[>] Processing Zoom recording...\n"
+                "⏳ Processing Zoom recording...\n"
                 "    This may take several minutes..."
             )
 
@@ -895,29 +980,46 @@ async def handle_zoom_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chars = result.get("transcript_length", 0)
                 link = result.get("dashboard_url", "")
 
-                fallback_note = ""
+                notes = []
                 if result.get("transcriber_used") == "gemini-only":
                     reason = result.get("fallback_reason", "")
-                    fallback_note = (
-                        "\n[!] תמלול נעשה ב-Gemini בלבד "
-                        "(Hebrew AI לא זמין"
-                        f"{': ' + reason[:100] if reason else ''})\n"
-                    )
+                    note = "⚠️ תמלול נעשה ב-Gemini בלבד (Hebrew AI לא זמין"
+                    if reason:
+                        note += f": {reason[:100]}"
+                    note += ")"
+                    notes.append(note)
 
-                await status_msg.edit_text(
-                    f"[=] Done{fallback_note}\n\n"
-                    f"Duration: {duration_str}\n"
-                    f"Transcript: {chars:,} characters\n"
-                    f"Folder: {result.get('folder_name', '')}\n\n"
-                    f"{link}"
+                head = "🎉 הסתיים" if not notes else "✅ הסתיים עם הערות"
+                summary_text = (
+                    f"{head}\n"
+                    + ("\n".join(notes) + "\n\n" if notes else "\n")
+                    + f"Duration: {duration_str}\n"
+                    + f"Transcript: {chars:,} characters\n"
+                    + f"Folder: {result.get('folder_name', '')}\n\n"
+                    + f"{link}"
                 )
+
+                try:
+                    await status_msg.edit_text(head)
+                except Exception:
+                    pass
+                await status_msg.reply_text(summary_text)
             else:
-                await status_msg.edit_text(f"[x] Error:\n{result.get('error', 'Unknown')[:500]}")
+                err = result.get("error", "Unknown")[:500]
+                try:
+                    await status_msg.edit_text("❌ נכשל")
+                except Exception:
+                    pass
+                await status_msg.reply_text(f"❌ Error:\n{err}")
 
         except Exception as e:
             logger.error(f"Error processing Zoom link from {telegram_id}: {e}")
             try:
-                await status_msg.edit_text(f"[x] Error:\n{str(e)[:500]}")
+                await status_msg.edit_text("❌ נכשל")
+            except Exception:
+                pass
+            try:
+                await status_msg.reply_text(f"❌ Error:\n{str(e)[:500]}")
             except Exception:
                 pass
         finally:
