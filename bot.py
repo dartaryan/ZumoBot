@@ -94,10 +94,13 @@ def _format_label(value: str) -> str:
 _CONVERSATION_KEYS = [
     "tmp_dir", "file_path", "file_name", "user", "language",
     "status_msg", "session_type", "speakers", "purpose", "output_format",
-    "extra_context", "gemini_text", "hebrew_ai_text",
+    "extra_context", "gemini_text", "hebrew_ai_text", "text_input",
     "preprocess_task", "preprocess_done",
     "proceed_started", "confirm_started", "last_prompt_msg_id",
 ]
+
+MAX_TEXT_INPUT_BYTES = 500 * 1024
+MAX_TEXT_INPUT_CHARS = 200_000
 
 
 def parse_caption(caption: str | None) -> dict:
@@ -314,12 +317,14 @@ def _analyze_gemini_speakers(gemini_text: str) -> dict:
 async def _process_and_reply(
     status_msg, file_path, file_name, user,
     session_type, speakers, language, user_requests, telegram_id,
-    hebrew_ai_text="", gemini_text="",
+    hebrew_ai_text="", gemini_text="", text_input="",
 ):
     """Run the pipeline and send the result.
 
-    If hebrew_ai_text and gemini_text are provided (from preprocess),
-    skip the transcription steps and go straight to analysis.
+    If text_input is provided, skip transcription/merge entirely and use the
+    text verbatim as the canonical transcript. Otherwise, if hebrew_ai_text
+    and gemini_text are provided (from preprocess), skip transcription and
+    run merge + analysis. Falls back to the full pipeline if neither is set.
     """
     await status_msg.edit_text(
         f"⏳ Processing: {file_name}\n"
@@ -327,12 +332,85 @@ async def _process_and_reply(
         f"    Starting pipeline..."
     )
 
-    ticker = asyncio.create_task(
-        _progress_ticker(status_msg, file_name, session_type)
-    )
+    # Skip the audio-stage progress ticker for text input — its stages
+    # ("Transcribing audio", "Identifying speakers") would be misleading.
+    ticker = None
+    if not text_input:
+        ticker = asyncio.create_task(
+            _progress_ticker(status_msg, file_name, session_type)
+        )
 
     try:
-        if hebrew_ai_text or gemini_text:
+        if text_input:
+            from src.processor import analyze_transcript, generate_summary
+            from src.formatter import format_analysis_md, format_transcript_md, generate_folder_name
+            from src.storage import ensure_repo_structure, save_session
+            from datetime import datetime
+
+            loop = asyncio.get_event_loop()
+
+            primary_text = text_input
+            original_duration = 0
+            timestamp = datetime.now()
+
+            try:
+                summary = await loop.run_in_executor(
+                    None, lambda: generate_summary(primary_text, user.anthropic_api_key)
+                )
+            except Exception as e:
+                logger.error(f"Summary generation failed: {e}")
+                summary = ""
+
+            analysis = None
+            analysis_error = ""
+            try:
+                analysis = await loop.run_in_executor(
+                    None, lambda: analyze_transcript(
+                        primary_text, user.anthropic_api_key,
+                        session_type, speakers, language,
+                        user_requests=user_requests,
+                        merged=True,
+                    )
+                )
+            except Exception as e:
+                analysis_error = str(e)
+                logger.error(f"Analysis failed, publishing transcript-only: {e}")
+
+            analysis_failed = not analysis
+
+            folder_name = generate_folder_name(
+                session_type, speakers or file_path.stem, timestamp,
+            )
+            transcript_md = format_transcript_md(
+                primary_text, file_path.stem, session_type, speakers, language,
+                original_duration, original_duration, 0, timestamp,
+            )
+            analysis_md = format_analysis_md(
+                analysis, summary, session_type, speakers, timestamp,
+            ) if analysis else None
+
+            ensure_repo_structure(user.dashboard_slug)
+            dashboard_url = await loop.run_in_executor(
+                None, lambda: save_session(
+                    user.dashboard_slug, folder_name,
+                    transcript_md, analysis_md, summary,
+                    user_name=user.name,
+                    pw_hash=user.web_password_hash,
+                )
+            )
+
+            result = {
+                "status": "success",
+                "folder_name": folder_name,
+                "transcript_length": len(primary_text),
+                "original_duration": original_duration,
+                "dashboard_url": dashboard_url,
+                "transcriber_used": "text-input",
+                "analysis_failed": analysis_failed,
+                "analysis_error": analysis_error,
+                "merge_error": "",
+            }
+        elif hebrew_ai_text or gemini_text:
             # We already have transcriptions — run merge + analysis directly.
             from src.processor import analyze_transcript, generate_summary
             from src.merge_agent import merge_transcripts
@@ -467,7 +545,8 @@ async def _process_and_reply(
                 ),
             )
     finally:
-        ticker.cancel()
+        if ticker:
+            ticker.cancel()
 
     if result["status"] == "success":
         duration_str = format_duration(result.get("original_duration", 0))
@@ -533,6 +612,135 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"  type:training speakers:Ben,Omri lang:he\n\n"
         f"Session types: {types_list}"
     )
+
+
+async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry point: receive .md/.txt file, normalize, store as text_input,
+    then run the same conversation flow as the audio path. Skips transcription
+    and merge — the file's contents are the canonical transcript."""
+    telegram_id = update.effective_user.id
+    user_info = find_user_by_telegram_id(telegram_id)
+
+    if not user_info:
+        diag = diagnose_telegram_id(telegram_id)
+        if diag:
+            await update.message.reply_text(f"⚠️ {diag}")
+        else:
+            await update.message.reply_text(
+                f"Access denied. Your Telegram ID is not registered.\n"
+                f"Your ID: {telegram_id}"
+            )
+        return ConversationHandler.END
+
+    _username, user = user_info
+    msg = update.message
+    document = msg.document
+    file_name = document.file_name or "transcript.txt"
+    file_size = document.file_size or 0
+
+    if file_size > MAX_TEXT_INPUT_BYTES:
+        await msg.reply_text("❌ הקובץ גדול מדי. עד 500KB או 200,000 תווים.")
+        return ConversationHandler.END
+
+    status_msg = await msg.reply_text("⏳ Downloading file...")
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="zumo-text-"))
+    file_path = tmp_dir / file_name
+
+    try:
+        tg_file = await document.get_file()
+        await tg_file.download_to_drive(str(file_path))
+    except Exception as e:
+        logger.error(f"Failed to download text file from {telegram_id}: {e}")
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        try:
+            await status_msg.edit_text(f"❌ Error:\n{str(e)[:500]}")
+        except Exception:
+            pass
+        return ConversationHandler.END
+
+    raw = file_path.read_bytes()
+    text = None
+    for encoding in ("utf-8", "utf-8-sig"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        try:
+            await status_msg.edit_text(
+                "❌ לא הצלחתי לקרוא את הקובץ כטקסט. ודא שהוא בקידוד UTF-8 ולא בינארי."
+            )
+        except Exception:
+            pass
+        return ConversationHandler.END
+
+    # Normalize: strip BOM, normalize line endings, trim trailing whitespace
+    # per line, collapse runs of 3+ blank lines (= 4+ newlines) down to 2.
+    text = text.lstrip("﻿")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = "\n".join(line.rstrip() for line in text.split("\n"))
+    text = re.sub(r"\n{4,}", "\n\n\n", text)
+    text = text.strip()
+
+    if not text:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        try:
+            await status_msg.edit_text("❌ הקובץ ריק. שלח קובץ עם תוכן.")
+        except Exception:
+            pass
+        return ConversationHandler.END
+    if len(text) > MAX_TEXT_INPUT_CHARS:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        try:
+            await status_msg.edit_text("❌ הקובץ גדול מדי. עד 500KB או 200,000 תווים.")
+        except Exception:
+            pass
+        return ConversationHandler.END
+
+    try:
+        await status_msg.edit_text(
+            "📄 קיבלתי את הקובץ. מדלג על שלב התמלול — נשתמש בטקסט שלך כפי שהוא."
+        )
+    except Exception:
+        pass
+
+    language = user.default_language
+    context.user_data["tmp_dir"] = tmp_dir
+    context.user_data["file_path"] = file_path
+    context.user_data["file_name"] = file_name
+    context.user_data["user"] = user
+    context.user_data["language"] = language
+    context.user_data["status_msg"] = status_msg
+    context.user_data["session_type"] = "other"
+    context.user_data["speakers"] = ""
+    context.user_data["purpose"] = ""
+    context.user_data["output_format"] = "standard"
+    context.user_data["extra_context"] = []
+    context.user_data["preprocess_done"] = True
+    context.user_data["text_input"] = text
+
+    keyboard = []
+    for label, value, _subtitle in SESSION_TYPE_LABELS:
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"type:{value}")])
+    keyboard.append([InlineKeyboardButton("דלג (Skip)", callback_data="type:skip")])
+
+    prompt_lines = [
+        "ממשיכים עם השאלות הרגילות כדי לבנות את הניתוח.",
+        "",
+        "מה סוג השיחה?",
+        "",
+    ]
+    for label, _, subtitle in SESSION_TYPE_LABELS:
+        prompt_lines.append(f"{label} — {subtitle}")
+
+    await msg.reply_text(
+        "\n".join(prompt_lines),
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return WAITING_TYPE
 
 
 async def handle_file_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -866,7 +1074,9 @@ async def _proceed_to_confirm(message, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-    if context.user_data.get("preprocess_done"):
+    if context.user_data.get("text_input"):
+        summary_lines.append("\nטקסט מוכן -- מוכן לעיבוד.")
+    elif context.user_data.get("preprocess_done"):
         summary_lines.append("\nתמלול הושלם ברקע -- מוכן לעיבוד.")
     else:
         summary_lines.append("\nתמלול עדיין רץ ברקע -- העיבוד ימשיך כשיסיים.")
@@ -957,6 +1167,7 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_requests, telegram_id,
             hebrew_ai_text=hebrew_ai_text,
             gemini_text=gemini_text,
+            text_input=context.user_data.get("text_input", ""),
         )
     except Exception as e:
         logger.error(f"Error processing file from {telegram_id}: {e}")
@@ -1134,6 +1345,12 @@ def main():
     # Interactive file processing conversation
     file_conv = ConversationHandler(
         entry_points=[
+            # Text-transcript path must precede the audio entry — otherwise
+            # `Document.ALL` would catch .md/.txt and route to handle_file_entry.
+            MessageHandler(
+                filters.Document.FileExtension("md") | filters.Document.FileExtension("txt"),
+                text_input_handler,
+            ),
             MessageHandler(
                 filters.AUDIO | filters.VIDEO | filters.VOICE | filters.VIDEO_NOTE | filters.Document.ALL,
                 handle_file_entry,
