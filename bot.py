@@ -561,6 +561,12 @@ async def _process_and_reply(
                 note += f": {reason[:100]}"
             note += ")"
             notes.append(note)
+        if result.get("merge_error"):
+            reason = result.get("merge_error", "")
+            note = "⚠️ מיזוג דוברים נכשל — התמלול נשמר בלי תוויות דובר"
+            if reason:
+                note += f" ({reason[:100]})"
+            notes.append(note)
         if result.get("analysis_failed"):
             reason = result.get("analysis_error", "")
             note = "⚠️ ניתוח נכשל — תמלול בלבד זמין בעמוד"

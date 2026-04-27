@@ -47,8 +47,11 @@ def merge_transcripts(
         f"{(gemini_text or '')[:_MAX_CHARS_PER_SIDE]}"
     )
 
+    # Streaming is required by the Anthropic SDK whenever max_tokens crosses the
+    # 10-minute estimated-runtime threshold (32k tokens at Opus throughput would
+    # exceed it). Use the messages.stream context manager and collect the text.
     client = Anthropic(api_key=api_key)
-    response = client.messages.create(
+    with client.messages.stream(
         model=OPUS_MODEL,
         max_tokens=_MAX_TOKENS,
         system=_SYSTEM_PROMPT,
@@ -56,11 +59,9 @@ def merge_transcripts(
             "role": "user",
             "content": user_message,
         }],
-    )
+    ) as stream:
+        text = "".join(stream.text_stream)
 
-    if not response.content:
-        raise RuntimeError("Merge agent returned no content.")
-    text = response.content[0].text or ""
     if not text.strip():
         raise RuntimeError("Merge agent returned empty text.")
     return text
