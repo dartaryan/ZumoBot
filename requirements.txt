@@ -4,7 +4,7 @@ requests>=2.31
 PyGithub>=2.5.0
 python-dotenv>=1.0.0
 python-slugify>=8.0.0
-python-telegram-bot>=21.0
+python-telegram-bot[job-queue]>=21.0
 google-genai>=1.0.0
 
 # === Large file support (recommended — enables downloading files > 20MB) ===

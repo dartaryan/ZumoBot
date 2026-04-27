@@ -50,15 +50,46 @@ MEDIA_EXTENSIONS = {
     WAITING_CONFIRM,
 ) = range(6)
 
-# Session type labels for inline keyboard
+# Session type labels for inline keyboard. The subtitle accompanies the prompt
+# text so the button stays compact while the user still sees what each one means.
 SESSION_TYPE_LABELS = [
-    ("ישיבת צוות (Team Meeting)", "team-meeting"),
-    ("הדרכה (Training)", "training"),
-    ("שיחת לקוח (Client Call)", "client-call"),
-    ("שיחת טלפון (Phone Call)", "phone-call"),
-    ("אימון (Coaching)", "coaching"),
-    ("אחר (Other)", "other"),
+    ("📋 ישיבת צוות", "team-meeting", "סטטוס, דיון פנימי, החלטות"),
+    ("🎓 הדרכה / סדנה", "training", "סדנה שאתה מעביר"),
+    ("🛠️ הכנה לסדנה", "workshop-prep", "שיחת מיפוי לפני סדנה"),
+    ("🤝 שיחת לקוח", "client-call", "היכרות, אפיון, ייעוץ"),
+    ("💡 אימון / חניכה", "coaching", "שיחה אחד-על-אחד עם מודרך"),
+    ("📞 שיחת טלפון", "phone-call", "שיחה לא פורמלית, סטטוס מהיר"),
+    ("🎙️ פודקאסט / ראיון", "podcast", "אתה מתראיין או מנחה"),
+    ("🎤 הקלטה קצרה / וויס", "voice-memo", "מונולוג, הקלטת זיכרון"),
+    ("📝 אחר", "other", "לא מתאים לאף קטגוריה"),
 ]
+
+# Output format labels and subtitles for the format-choice keyboard.
+FORMAT_LABELS = {
+    "standard": "📊 ניתוח שיחה",
+    "knowledge-base": "📚 מסמך מקור ידע",
+}
+FORMAT_SUBTITLES = {
+    "standard": "מסכם החלטות, משימות, תובנות, וטענות מרכזיות",
+    "knowledge-base": "תוכן ארוך וערוך לחזרה — מדריך, מאמר, או חומר רקע",
+}
+
+# Default output format per session type. Missing key → ask the user.
+DEFAULT_OUTPUT_FORMAT = {
+    "team-meeting": "standard",
+    "training": "knowledge-base",
+    "workshop-prep": "standard",
+    "client-call": "standard",
+    "coaching": "knowledge-base",
+    "phone-call": "standard",
+    "podcast": "knowledge-base",
+    "voice-memo": "standard",
+}
+
+
+def _format_label(value: str) -> str:
+    """Return the Hebrew display label for an output_format value."""
+    return FORMAT_LABELS.get(value, value)
 
 _CONVERSATION_KEYS = [
     "tmp_dir", "file_path", "file_name", "user", "language",
@@ -192,7 +223,7 @@ async def _progress_ticker(status_msg, file_name, session_type):
         pass
 
 
-async def _run_preprocess(file_path, user, language):
+async def _run_preprocess(file_path, user, language, speakers: str = ""):
     """Run compression + dual transcription in background.
 
     Returns (hebrew_ai_text, gemini_text).
@@ -234,17 +265,22 @@ async def _run_preprocess(file_path, user, language):
         def _gemini():
             if not gemini_key:
                 return ""
-            return transcribe_with_diarization(upload_path, api_key=gemini_key)
+            return transcribe_with_diarization(
+                upload_path, api_key=gemini_key, speakers=speakers,
+            )
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             fh = pool.submit(_hebrew)
             fg = pool.submit(_gemini)
+            # Hard ceiling per future: Gemini's HTTP cap is 10 min and Hebrew AI
+            # has its own 30 min poll budget; either future hanging beyond 11 min
+            # counts as a failure and falls back to the other side.
             try:
-                h_text = fh.result()
+                h_text = fh.result(timeout=660)
             except Exception as e:
                 logger.error(f"Hebrew AI preprocess failed: {e}")
             try:
-                g_text = fg.result()
+                g_text = fg.result(timeout=660)
             except Exception as e:
                 logger.error(f"Gemini preprocess failed: {e}")
 
@@ -297,23 +333,56 @@ async def _process_and_reply(
 
     try:
         if hebrew_ai_text or gemini_text:
-            # We already have transcriptions — run analysis directly
+            # We already have transcriptions — run merge + analysis directly.
             from src.processor import analyze_transcript, generate_summary
+            from src.merge_agent import merge_transcripts
             from src.formatter import format_analysis_md, format_transcript_md, generate_folder_name
             from src.storage import ensure_repo_structure, save_session
             from src.audio import get_duration
             from datetime import datetime
 
-            if hebrew_ai_text:
+            loop = asyncio.get_event_loop()
+
+            # Merge agent — fold Hebrew AI words + Gemini diarization into a single,
+            # speaker-labeled transcript. On failure we fall back to dual-source
+            # analysis (Hebrew AI as primary, raw Gemini as side input).
+            merged_text = ""
+            merge_error = ""
+            try:
+                merged_text = await loop.run_in_executor(
+                    None, lambda: merge_transcripts(
+                        hebrew_ai_text=hebrew_ai_text,
+                        gemini_text=gemini_text,
+                        speakers=speakers,
+                        session_type=session_type,
+                        language=language,
+                        api_key=user.anthropic_api_key,
+                    )
+                )
+            except Exception as e:
+                merge_error = str(e)
+                logger.error(f"Merge agent failed, falling back to dual-source: {e}")
+
+            if merged_text:
+                primary_text = merged_text
+                side_gemini_text = ""
+                use_merged = True
+                if hebrew_ai_text and gemini_text:
+                    transcriber_used = "merged"
+                elif hebrew_ai_text:
+                    transcriber_used = "merged-from-hebrew"
+                else:
+                    transcriber_used = "merged-from-gemini"
+            elif hebrew_ai_text:
                 primary_text = hebrew_ai_text
                 side_gemini_text = gemini_text
+                use_merged = False
                 transcriber_used = "both" if gemini_text else "hebrew-ai"
             else:
                 primary_text = gemini_text
                 side_gemini_text = ""
+                use_merged = False
                 transcriber_used = "gemini-only"
-
-            loop = asyncio.get_event_loop()
 
             original_duration = await loop.run_in_executor(None, lambda: get_duration(file_path))
             timestamp = datetime.now()
@@ -337,6 +406,7 @@ async def _process_and_reply(
                         session_type, speakers, language,
                         user_requests=user_requests,
                         gemini_text=side_gemini_text,
+                        merged=use_merged,
                     )
                 )
             except Exception as e:
@@ -375,6 +445,7 @@ async def _process_and_reply(
                 "transcriber_used": transcriber_used,
                 "analysis_failed": analysis_failed,
                 "analysis_error": analysis_error,
+                "merge_error": merge_error,
             }
         else:
             # Fallback: run the full pipeline
@@ -553,12 +624,16 @@ async def handle_file_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Ask session type while transcription runs in background
     keyboard = []
-    for label, value in SESSION_TYPE_LABELS:
+    for label, value, _subtitle in SESSION_TYPE_LABELS:
         keyboard.append([InlineKeyboardButton(label, callback_data=f"type:{value}")])
     keyboard.append([InlineKeyboardButton("דלג (Skip)", callback_data="type:skip")])
 
+    prompt_lines = ["מה סוג השיחה?", ""]
+    for label, _, subtitle in SESSION_TYPE_LABELS:
+        prompt_lines.append(f"{label} — {subtitle}")
+
     await msg.reply_text(
-        "מה סוג השיחה?",
+        "\n".join(prompt_lines),
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return WAITING_TYPE
@@ -573,7 +648,11 @@ async def handle_type_choice(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if value != "skip":
         context.user_data["session_type"] = value
 
-    type_label = dict(SESSION_TYPE_LABELS).get(value, value) if value != "skip" else "דלג"
+    if value == "skip":
+        type_label = "דלג"
+    else:
+        label_by_value = {v: lab for lab, v, _ in SESSION_TYPE_LABELS}
+        type_label = label_by_value.get(value, value)
     await query.edit_message_text(f"סוג: {type_label}")
 
     # Check if preprocess is done — if so, suggest speakers from Gemini
@@ -627,36 +706,61 @@ async def handle_speakers_text(update: Update, context: ContextTypes.DEFAULT_TYP
     return WAITING_PURPOSE
 
 
+async def _ask_for_conversation(message, context: ContextTypes.DEFAULT_TYPE):
+    """Send the additional-context prompt and enter WAITING_CONVERSATION."""
+    keyboard = [
+        [InlineKeyboardButton("המשך (Continue)", callback_data="conversation:done")],
+    ]
+    prompt = await message.reply_text(
+        "יש משהו נוסף שחשוב לי לדעת על השיחה הזאת?\n"
+        "אפשר לכתוב הקשר, רקע, או בקשות מיוחדות.\n"
+        "או לחץ המשך.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    context.user_data["last_prompt_msg_id"] = prompt.message_id
+    return WAITING_CONVERSATION
+
+
+async def _ask_format_or_skip(message, context: ContextTypes.DEFAULT_TYPE):
+    """If the session type has a default format, set it and skip to the
+    conversation step. Otherwise, show the format-choice keyboard."""
+    session_type = context.user_data.get("session_type", "other")
+    default_format = DEFAULT_OUTPUT_FORMAT.get(session_type)
+    if default_format:
+        context.user_data["output_format"] = default_format
+        await message.reply_text(
+            f"פורמט: {_format_label(default_format)} (ברירת מחדל)"
+        )
+        return await _ask_for_conversation(message, context)
+
+    keyboard = [
+        [InlineKeyboardButton(FORMAT_LABELS["standard"], callback_data="format:standard")],
+        [InlineKeyboardButton(FORMAT_LABELS["knowledge-base"], callback_data="format:knowledge-base")],
+    ]
+    prompt_text = (
+        "באיזה פורמט להפיק את הפלט?\n\n"
+        f"{FORMAT_LABELS['standard']} — {FORMAT_SUBTITLES['standard']}\n"
+        f"{FORMAT_LABELS['knowledge-base']} — {FORMAT_SUBTITLES['knowledge-base']}"
+    )
+    await message.reply_text(
+        prompt_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return WAITING_FORMAT
+
+
 async def handle_purpose_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle purpose skip button."""
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("מטרה: דלג")
-
-    keyboard = [
-        [InlineKeyboardButton("מסמך מקור ידע (Knowledge Base)", callback_data="format:knowledge-base")],
-        [InlineKeyboardButton("ניתוח מובנה (Structured Analysis)", callback_data="format:standard")],
-    ]
-    await query.message.reply_text(
-        "באיזה פורמט להפיק את הפלט?",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-    return WAITING_FORMAT
+    return await _ask_format_or_skip(query.message, context)
 
 
 async def handle_purpose_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle purpose typed as text."""
     context.user_data["purpose"] = update.message.text.strip()
-
-    keyboard = [
-        [InlineKeyboardButton("מסמך מקור ידע (Knowledge Base)", callback_data="format:knowledge-base")],
-        [InlineKeyboardButton("ניתוח מובנה (Structured Analysis)", callback_data="format:standard")],
-    ]
-    await update.message.reply_text(
-        "באיזה פורמט להפיק את הפלט?",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-    return WAITING_FORMAT
+    return await _ask_format_or_skip(update.message, context)
 
 
 async def handle_format_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -667,21 +771,8 @@ async def handle_format_choice(update: Update, context: ContextTypes.DEFAULT_TYP
     value = query.data.replace("format:", "")
     context.user_data["output_format"] = value
 
-    format_label = "מסמך מקור ידע" if value == "knowledge-base" else "ניתוח מובנה"
-    await query.edit_message_text(f"פורמט: {format_label}")
-
-    # Ask for additional context (WAITING_CONVERSATION)
-    keyboard = [
-        [InlineKeyboardButton("המשך (Continue)", callback_data="conversation:done")],
-    ]
-    prompt = await query.message.reply_text(
-        "יש משהו נוסף שחשוב לי לדעת על השיחה הזאת?\n"
-        "אפשר לכתוב הקשר, רקע, או בקשות מיוחדות.\n"
-        "או לחץ המשך.",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-    context.user_data["last_prompt_msg_id"] = prompt.message_id
-    return WAITING_CONVERSATION
+    await query.edit_message_text(f"פורמט: {_format_label(value)}")
+    return await _ask_for_conversation(query.message, context)
 
 
 async def handle_conversation_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -752,7 +843,7 @@ async def _proceed_to_confirm(message, context: ContextTypes.DEFAULT_TYPE):
 
     type_info = SESSION_TYPES.get(session_type, {})
     type_label = type_info.get("he", session_type)
-    format_label = "מסמך מקור ידע" if output_format == "knowledge-base" else "ניתוח מובנה"
+    format_label = _format_label(output_format)
 
     summary_lines = [
         f"סוג: {type_label}",

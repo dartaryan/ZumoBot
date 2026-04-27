@@ -37,6 +37,7 @@ from src.audio import (
 from src.transcriber import transcribe
 from src.gemini_transcriber import transcribe_with_diarization
 from src.processor import analyze_transcript, generate_summary
+from src.merge_agent import merge_transcripts
 from src.formatter import (
     format_analysis_md,
     format_transcript_md,
@@ -147,6 +148,7 @@ def process_file(
                     upload_path,
                     api_key=_gemini_key,
                     on_progress=lambda msg: print(f"  [Gemini] {msg}"),
+                    speakers=speakers,
                 )
 
             with ThreadPoolExecutor(max_workers=2) as pool:
@@ -195,17 +197,44 @@ def process_file(
             if transcriber_used == "gemini-only":
                 result["fallback_reason"] = hebrew_ai_error or "Hebrew AI unavailable"
 
-            # --- Step 5: Zoom VTT fallback ---
+            # --- Step 5: Zoom VTT fallback / Merge agent ---
+            vtt_applied = False
             if zoom_vtt_path and zoom_vtt_path.exists() and not side_gemini_text and transcriber_used != "gemini-only":
                 print(f"\n[5/8] Aligning speakers from Zoom VTT: {zoom_vtt_path.name}")
                 try:
                     from src.vtt_align import align_with_zoom_vtt
                     primary_text = align_with_zoom_vtt(primary_text, zoom_vtt_path)
+                    vtt_applied = True
                     print(f"  Speaker-aligned transcript: {len(primary_text)} characters.")
                 except Exception as e:
                     print(f"  VTT alignment failed, using raw transcript: {e}")
+
+            # Merge agent: produce a unified, speaker-labeled transcript from
+            # Hebrew AI words + Gemini turns. Skip when VTT already labeled the
+            # transcript or when the Anthropic key isn't available.
+            use_merged = False
+            if not vtt_applied and user.anthropic_api_key and not skip_analysis:
+                print("\n[5b/8] Running merge agent (speaker reconciliation)...")
+                try:
+                    merged_text = merge_transcripts(
+                        hebrew_ai_text=hebrew_ai_text,
+                        gemini_text=gemini_text,
+                        speakers=speakers,
+                        session_type=session_type,
+                        language=language,
+                        api_key=user.anthropic_api_key,
+                    )
+                    if merged_text.strip():
+                        primary_text = merged_text
+                        side_gemini_text = ""
+                        use_merged = True
+                        print(f"  Merge complete ({len(merged_text)} characters).")
+                except Exception as e:
+                    print(f"  Merge agent failed, falling back to dual-source analysis: {e}")
+            elif vtt_applied:
+                print("\n[5b/8] Merge agent skipped (VTT alignment in use).")
             else:
-                print("\n[5/8] Speaker diarization via Gemini (passed to Claude).")
+                print("\n[5b/8] Merge agent skipped (no Anthropic key or skip_analysis).")
 
             # --- Step 6: Summary ---
             print("\n[6/8] Generating summary...")
@@ -217,7 +246,7 @@ def process_file(
                 print("\n[7/8] Skipping analysis.")
                 analysis = None
             else:
-                print("\n[7/8] Claude synthesis (merging dual transcriptions)...")
+                print("\n[7/8] Claude analysis...")
                 analysis = analyze_transcript(
                     primary_text,
                     user.anthropic_api_key,
@@ -226,6 +255,7 @@ def process_file(
                     language,
                     user_requests=user_requests,
                     gemini_text=side_gemini_text,
+                    merged=use_merged,
                 )
                 print(f"  Analysis complete ({len(analysis)} characters).")
 

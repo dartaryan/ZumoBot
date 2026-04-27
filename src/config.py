@@ -29,8 +29,11 @@ POLL_INTERVAL = 5  # seconds between status checks
 POLL_TIMEOUT = 1800  # 30 minutes max wait
 
 # --- Claude Models ---
+# NOTE: SONNET_MODEL is misnamed for legacy reasons — it actually points to Opus 4.6,
+# which the analysis agent uses. Don't change it; add new constants alongside.
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 SONNET_MODEL = "claude-opus-4-6"
+OPUS_MODEL = "claude-opus-4-7"
 
 # --- Gemini (speaker diarization) ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
@@ -51,10 +54,13 @@ DASHBOARD_BASE_URL = os.getenv("DASHBOARD_BASE_URL", "")
 # --- Session Types ---
 SESSION_TYPES = {
     "team-meeting": {"he": "ישיבת צוות", "en": "Team Meeting", "emoji": "📋"},
-    "training": {"he": "הדרכה", "en": "Training Session", "emoji": "🎓"},
+    "training": {"he": "הדרכה / סדנה", "en": "Training / Workshop", "emoji": "🎓"},
+    "workshop-prep": {"he": "הכנה לסדנה", "en": "Workshop Prep", "emoji": "🛠️"},
     "client-call": {"he": "שיחת לקוח", "en": "Client Call", "emoji": "🤝"},
+    "coaching": {"he": "אימון / חניכה", "en": "Coaching", "emoji": "💡"},
     "phone-call": {"he": "שיחת טלפון", "en": "Phone Call", "emoji": "📞"},
-    "coaching": {"he": "אימון", "en": "Coaching", "emoji": "💡"},
+    "podcast": {"he": "פודקאסט / ראיון", "en": "Podcast / Interview", "emoji": "🎙️"},
+    "voice-memo": {"he": "הקלטה קצרה / וויס", "en": "Voice Memo", "emoji": "🎤"},
     "other": {"he": "אחר", "en": "Other", "emoji": "📝"},
 }
 
