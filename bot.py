@@ -1066,7 +1066,17 @@ async def _proceed_to_confirm(message, context: ContextTypes.DEFAULT_TYPE):
         f"פורמט: {format_label}",
     ]
     if extra:
-        summary_lines.append(f"הקשר נוסף: {'; '.join(extra)}")
+        # Telegram caps a single message at 4096 chars. The full extra context
+        # is still stored in user_data and fed to analysis — we only truncate
+        # what we echo back in the summary.
+        joined = "; ".join(extra)
+        total_chars = len(joined)
+        preview_limit = 2000
+        if total_chars > preview_limit:
+            preview = joined[:preview_limit] + f"…\n[+{total_chars - preview_limit:,} תווים נוספים נשמרו]"
+        else:
+            preview = joined
+        summary_lines.append(f"הקשר נוסף ({total_chars:,} תווים): {preview}")
 
     # Check preprocess status
     preprocess_task = context.user_data.get("preprocess_task")
