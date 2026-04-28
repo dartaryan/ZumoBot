@@ -1,10 +1,13 @@
 """Claude API for transcript analysis."""
 
+import logging
 from pathlib import Path
 
-from anthropic import Anthropic
+from anthropic import Anthropic, APIStatusError
 
 from .config import HAIKU_MODEL, SONNET_MODEL
+
+logger = logging.getLogger(__name__)
 
 # Load the Zumo Bot agent prompt once at import time
 _AGENT_PROMPT_PATH = Path(__file__).parent.parent / "zumo-bot-agent.md"
@@ -86,14 +89,22 @@ def analyze_transcript(
             f"{gemini_text[:100000]}"
         )
 
+    # Streaming is required by Anthropic when a request may exceed the 10-minute
+    # runtime estimate. With Opus + max_tokens=16384 + ~200K chars of input this
+    # threshold is crossed and non-streaming requests are rejected with HTTP 400.
     client = Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model=model,
-        max_tokens=16384,
-        system=_AGENT_PROMPT,
-        messages=[{
-            "role": "user",
-            "content": user_message,
-        }],
-    )
-    return response.content[0].text
+    try:
+        with client.messages.stream(
+            model=model,
+            max_tokens=16384,
+            system=_AGENT_PROMPT,
+            messages=[{
+                "role": "user",
+                "content": user_message,
+            }],
+        ) as stream:
+            return "".join(stream.text_stream)
+    except APIStatusError as e:
+        body = getattr(getattr(e, "response", None), "text", "") or str(e)
+        logger.error("analyze_transcript Anthropic %s: %s", e.status_code, body)
+        raise
