@@ -1215,7 +1215,10 @@ async def handle_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_zoom_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Process text messages containing Zoom recording links."""
+    """Entry point for Zoom links. Downloads the recording, then enters the
+    same interactive question flow used for direct file uploads — so the user
+    is asked session type, speakers, etc., instead of falling back to
+    hard-coded defaults."""
     telegram_id = update.effective_user.id
     user_info = find_user_by_telegram_id(telegram_id)
 
@@ -1228,121 +1231,91 @@ async def handle_zoom_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Access denied. Your Telegram ID is not registered.\n"
                 f"Your ID: {telegram_id}"
             )
-        return
+        return ConversationHandler.END
 
     text = update.message.text or ""
     urls = ZOOM_URL_PATTERN.findall(text)
     if not urls:
-        return  # Not a Zoom link -- ignore silently
+        return ConversationHandler.END  # Not a Zoom link
 
     _username, user = user_info
     language = user.default_language
+    url = urls[0]  # Only the first URL enters the interactive flow
 
-    for url in urls:
-        status_msg = await update.message.reply_text("⏳ Downloading Zoom recording...")
+    status_msg = await update.message.reply_text("⏳ Downloading Zoom recording...")
+    tmp_dir = Path(tempfile.mkdtemp(prefix="zumo-zoom-"))
 
-        tmp_dir = None
-        try:
-            from src.downloader import download_zoom_recording
-            from pipeline import process_file
+    try:
+        from src.downloader import download_zoom_recording
 
-            tmp_dir = Path(tempfile.mkdtemp(prefix="zumo-zoom-"))
-
-            # Extract passcode from URL query param or message text (for yt-dlp fallback)
-            passcode = None
-            m = re.search(r"[?&]pwd=(\w+)", url)
+        # Extract passcode from URL query param or message text (for yt-dlp fallback)
+        passcode = None
+        m = re.search(r"[?&]pwd=(\w+)", url)
+        if m:
+            passcode = m.group(1)
+        else:
+            m = re.search(r"[Pp]asscode[:\s]+(\S+)", text)
             if m:
                 passcode = m.group(1)
-            else:
-                m = re.search(r"[Pp]asscode[:\s]+(\S+)", text)
-                if m:
-                    passcode = m.group(1)
 
-            loop = asyncio.get_event_loop()
+        loop = asyncio.get_event_loop()
+        zoom_files = await loop.run_in_executor(
+            None,
+            lambda: download_zoom_recording(url, tmp_dir, passcode),
+        )
 
-            # Download via Zoom API (returns dict of file paths)
-            zoom_files = await loop.run_in_executor(
-                None,
-                lambda: download_zoom_recording(url, tmp_dir, passcode),
-            )
+        file_path = zoom_files.get("audio") or zoom_files.get("video")
+        if not file_path:
+            raise RuntimeError("No audio/video file downloaded from Zoom")
 
-            # Use audio file for transcription, fall back to video
-            file_path = zoom_files.get("audio") or zoom_files.get("video")
-            if not file_path:
-                raise RuntimeError("No audio/video file downloaded from Zoom")
+    except Exception as e:
+        logger.error(f"Error downloading Zoom link from {telegram_id}: {e}")
+        try:
+            await status_msg.edit_text(f"❌ Download failed:\n{str(e)[:500]}")
+        except Exception:
+            pass
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return ConversationHandler.END
 
-            vtt_path = zoom_files.get("transcript")
+    # Mirror handle_file_entry: store data and start the interactive flow.
+    file_name = Path(file_path).name
+    context.user_data["tmp_dir"] = tmp_dir
+    context.user_data["file_path"] = file_path
+    context.user_data["file_name"] = file_name
+    context.user_data["user"] = user
+    context.user_data["language"] = language
+    context.user_data["status_msg"] = status_msg
+    context.user_data["session_type"] = "team-meeting"  # sensible default for Zoom
+    context.user_data["speakers"] = ""
+    context.user_data["purpose"] = ""
+    context.user_data["output_format"] = "standard"
+    context.user_data["extra_context"] = []
+    context.user_data["preprocess_done"] = False
 
-            await status_msg.edit_text(
-                "⏳ Processing Zoom recording...\n"
-                "    This may take several minutes..."
-            )
+    await status_msg.edit_text(
+        "✅ Zoom recording downloaded.\n"
+        "⏳ Starting transcription in background..."
+    )
 
-            result = await loop.run_in_executor(
-                None,
-                lambda: process_file(
-                    file_path=file_path,
-                    user=user,
-                    session_type="team-meeting",
-                    speakers="",
-                    language=language,
-                    local_mode=False,
-                    skip_analysis=False,
-                    skip_diarization=False,
-                    zoom_vtt_path=vtt_path,
-                ),
-            )
+    preprocess_task = asyncio.create_task(
+        _run_preprocess(file_path, user, language)
+    )
+    context.user_data["preprocess_task"] = preprocess_task
 
-            if result["status"] == "success":
-                duration_str = format_duration(result.get("original_duration", 0))
-                chars = result.get("transcript_length", 0)
-                link = result.get("dashboard_url", "")
+    keyboard = []
+    for label, value, _subtitle in SESSION_TYPE_LABELS:
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"type:{value}")])
+    keyboard.append([InlineKeyboardButton("דלג (Skip)", callback_data="type:skip")])
 
-                notes = []
-                if result.get("transcriber_used") == "gemini-only":
-                    reason = result.get("fallback_reason", "")
-                    note = "⚠️ תמלול נעשה ב-Gemini בלבד (Hebrew AI לא זמין"
-                    if reason:
-                        note += f": {reason[:100]}"
-                    note += ")"
-                    notes.append(note)
+    prompt_lines = ["מה סוג השיחה?", ""]
+    for label, _, subtitle in SESSION_TYPE_LABELS:
+        prompt_lines.append(f"{label} — {subtitle}")
 
-                head = "🎉 הסתיים" if not notes else "✅ הסתיים עם הערות"
-                summary_text = (
-                    f"{head}\n"
-                    + ("\n".join(notes) + "\n\n" if notes else "\n")
-                    + f"Duration: {duration_str}\n"
-                    + f"Transcript: {chars:,} characters\n"
-                    + f"Folder: {result.get('folder_name', '')}\n\n"
-                    + f"{link}"
-                )
-
-                try:
-                    await status_msg.edit_text(head)
-                except Exception:
-                    pass
-                await status_msg.reply_text(summary_text)
-            else:
-                err = result.get("error", "Unknown")[:500]
-                try:
-                    await status_msg.edit_text("❌ נכשל")
-                except Exception:
-                    pass
-                await status_msg.reply_text(f"❌ Error:\n{err}")
-
-        except Exception as e:
-            logger.error(f"Error processing Zoom link from {telegram_id}: {e}")
-            try:
-                await status_msg.edit_text("❌ נכשל")
-            except Exception:
-                pass
-            try:
-                await status_msg.reply_text(f"❌ Error:\n{str(e)[:500]}")
-            except Exception:
-                pass
-        finally:
-            if tmp_dir and tmp_dir.exists():
-                shutil.rmtree(tmp_dir, ignore_errors=True)
+    await update.message.reply_text(
+        "\n".join(prompt_lines),
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return WAITING_TYPE
 
 
 # ---------------------------------------------------------------------------
@@ -1370,6 +1343,11 @@ def main():
             MessageHandler(
                 filters.AUDIO | filters.VIDEO | filters.VOICE | filters.VIDEO_NOTE | filters.Document.ALL,
                 handle_file_entry,
+            ),
+            # Zoom link entry — runs the same question flow as direct uploads.
+            MessageHandler(
+                filters.TEXT & ~filters.COMMAND & filters.Regex(ZOOM_URL_PATTERN),
+                handle_zoom_link,
             ),
         ],
         states={
@@ -1407,10 +1385,6 @@ def main():
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(file_conv)
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        handle_zoom_link,
-    ))
 
     logger.info("Zumo bot is running...")
     app.run_polling(drop_pending_updates=True)

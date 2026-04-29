@@ -2,6 +2,7 @@
 users/*.json
 !users/ben.json.example
 output/
+LOGS/
 __pycache__/
 *.pyc
 *.egg-info/
