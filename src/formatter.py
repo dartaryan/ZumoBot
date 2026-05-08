@@ -49,11 +49,22 @@ def format_transcript_md(
     trimmed_duration: float,
     silence_removed: float,
     timestamp: datetime,
+    merge_warning: str = "",
 ) -> str:
-    """Format the raw transcript as a markdown document with metadata."""
+    """Format the raw transcript as a markdown document with metadata.
+
+    `merge_warning` (when non-empty) appends an extra row to the metadata
+    table flagging that the merged transcript itself was truncated by the
+    merge agent — the body text is incomplete.
+    """
     type_info = SESSION_TYPES.get(session_type, SESSION_TYPES["other"])
     type_label = type_info["he"] if language == "he" else type_info["en"]
     lang_label = "עברית" if language == "he" else "English"
+
+    warning_row = (
+        f"\n| **⚠️ Merge truncated** | {merge_warning} |"
+        if merge_warning else ""
+    )
 
     return f"""# {original_name}
 
@@ -65,7 +76,7 @@ def format_transcript_md(
 | **Language** | {lang_label} |
 | **Original Duration** | {format_duration(original_duration)} |
 | **Trimmed Duration** | {format_duration(trimmed_duration)} |
-| **Silence Removed** | {format_duration(silence_removed)} |
+| **Silence Removed** | {format_duration(silence_removed)} |{warning_row}
 
 ---
 
@@ -79,12 +90,23 @@ def format_analysis_md(
     session_type: str,
     speakers: str,
     timestamp: datetime,
+    truncation_warning: str = "",
 ) -> str:
-    """Format the analysis output as a markdown document."""
+    """Format the analysis output as a markdown document.
+
+    `truncation_warning` (when non-empty) is rendered as a prominent banner
+    block right under the H1, before the Summary line — used when the
+    analysis or its source merged transcript was cut off by max_tokens.
+    """
     type_info = SESSION_TYPES.get(session_type, SESSION_TYPES["other"])
 
-    return f"""# {type_info["emoji"]} Analysis — {timestamp.strftime("%Y-%m-%d %H:%M")}
+    banner = (
+        f"\n> ⚠️ **{truncation_warning}**\n>\n"
+        if truncation_warning else ""
+    )
 
+    return f"""# {type_info["emoji"]} Analysis — {timestamp.strftime("%Y-%m-%d %H:%M")}
+{banner}
 > **Summary:** {summary}
 
 ---

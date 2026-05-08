@@ -5,6 +5,7 @@ from pathlib import Path
 
 from anthropic import Anthropic
 
+from .anthropic_stream import StreamResult, stream_with_continuation
 from .config import OPUS_MODEL
 
 # Load the merge agent system prompt once at module import.
@@ -26,11 +27,14 @@ def merge_transcripts(
     session_type: str,
     language: str,
     api_key: str,
-) -> str:
-    """Run the merge agent. Returns the merged transcript string.
+) -> StreamResult:
+    """Run the merge agent. Returns a StreamResult.
 
-    Raises on API error or empty response. The caller is responsible for
-    falling back to the previous behavior if this raises.
+    Raises RuntimeError on missing api key or empty result. Caller is
+    responsible for falling back to the previous behavior on failure, and for
+    surfacing `result.truncated` to the user when it's True (means the merged
+    transcript itself is incomplete — analysis downstream operates on partial
+    source).
     """
     if not api_key:
         raise RuntimeError("Anthropic API key is required for the merge agent.")
@@ -47,21 +51,15 @@ def merge_transcripts(
         f"{(gemini_text or '')[:_MAX_CHARS_PER_SIDE]}"
     )
 
-    # Streaming is required by the Anthropic SDK whenever max_tokens crosses the
-    # 10-minute estimated-runtime threshold (32k tokens at Opus throughput would
-    # exceed it). Use the messages.stream context manager and collect the text.
     client = Anthropic(api_key=api_key)
-    with client.messages.stream(
+    result = stream_with_continuation(
+        client=client,
         model=OPUS_MODEL,
         max_tokens=_MAX_TOKENS,
         system=_SYSTEM_PROMPT,
-        messages=[{
-            "role": "user",
-            "content": user_message,
-        }],
-    ) as stream:
-        text = "".join(stream.text_stream)
+        user_message=user_message,
+    )
 
-    if not text.strip():
+    if not result.text.strip():
         raise RuntimeError("Merge agent returned empty text.")
-    return text
+    return result

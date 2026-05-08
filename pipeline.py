@@ -213,10 +213,12 @@ def process_file(
             # Hebrew AI words + Gemini turns. Skip when VTT already labeled the
             # transcript or when the Anthropic key isn't available.
             use_merged = False
+            merge_truncated = False
+            merge_iterations = 0
             if not vtt_applied and user.anthropic_api_key and not skip_analysis:
                 print("\n[5b/8] Running merge agent (speaker reconciliation)...")
                 try:
-                    merged_text = merge_transcripts(
+                    merge_result = merge_transcripts(
                         hebrew_ai_text=hebrew_ai_text,
                         gemini_text=gemini_text,
                         speakers=speakers,
@@ -224,11 +226,17 @@ def process_file(
                         language=language,
                         api_key=user.anthropic_api_key,
                     )
+                    merged_text = merge_result.text
+                    merge_truncated = merge_result.truncated
+                    merge_iterations = merge_result.iterations
                     if merged_text.strip():
                         primary_text = merged_text
                         side_gemini_text = ""
                         use_merged = True
-                        print(f"  Merge complete ({len(merged_text)} characters).")
+                        print(
+                            f"  Merge complete ({len(merged_text)} characters, "
+                            f"iter={merge_iterations}, truncated={merge_truncated})."
+                        )
                 except Exception as e:
                     print(f"  Merge agent failed, falling back to dual-source analysis: {e}")
             elif vtt_applied:
@@ -242,12 +250,14 @@ def process_file(
             print(f"  Summary: {summary}")
 
             # --- Step 7: Analysis (Claude synthesis) ---
+            analysis_text = ""
+            analysis_truncated = False
+            analysis_iterations = 0
             if skip_analysis or not user.anthropic_api_key:
                 print("\n[7/8] Skipping analysis.")
-                analysis = None
             else:
                 print("\n[7/8] Claude analysis...")
-                analysis = analyze_transcript(
+                analysis_result = analyze_transcript(
                     primary_text,
                     user.anthropic_api_key,
                     session_type,
@@ -257,7 +267,36 @@ def process_file(
                     gemini_text=side_gemini_text,
                     merged=use_merged,
                 )
-                print(f"  Analysis complete ({len(analysis)} characters).")
+                analysis_text = analysis_result.text
+                analysis_truncated = analysis_result.truncated
+                analysis_iterations = analysis_result.iterations
+                print(
+                    f"  Analysis complete ({len(analysis_text)} characters, "
+                    f"iter={analysis_iterations}, truncated={analysis_truncated})."
+                )
+
+            # Build truncation banners for the formatters.
+            if merge_truncated and analysis_truncated:
+                analysis_warning = (
+                    f"מיזוג התמלול נחתך אחרי {merge_iterations} המשכי-אוטומטיים, "
+                    f"וגם הניתוח נחתך אחרי {analysis_iterations} — חסרים גם מקור וגם תוכן בסוף."
+                )
+            elif merge_truncated:
+                analysis_warning = (
+                    f"מיזוג התמלול נחתך אחרי {merge_iterations} המשכי-אוטומטיים — "
+                    f"הניתוח רץ על תמלול חלקי."
+                )
+            elif analysis_truncated:
+                analysis_warning = (
+                    f"הניתוח נחתך גם אחרי {analysis_iterations} המשכי-אוטומטיים — חסרים סעיפים בסוף."
+                )
+            else:
+                analysis_warning = ""
+
+            merge_warning = (
+                f"חלק מהשיחה לא נכלל בתמלול המאוחד (נחתך אחרי {merge_iterations} המשכי-אוטומטיים)"
+                if merge_truncated else ""
+            )
 
             # --- Step 8: Format & Save ---
             print("\n[8/8] Saving...")
@@ -268,12 +307,14 @@ def process_file(
             transcript_md = format_transcript_md(
                 primary_text, file_path.stem, session_type, speakers, language,
                 original_duration, trimmed_duration, silence_removed, timestamp,
+                merge_warning=merge_warning,
             )
 
             analysis_md = None
-            if analysis:
+            if analysis_text:
                 analysis_md = format_analysis_md(
-                    analysis, summary, session_type, speakers, timestamp,
+                    analysis_text, summary, session_type, speakers, timestamp,
+                    truncation_warning=analysis_warning,
                 )
 
             if local_mode:
@@ -305,6 +346,10 @@ def process_file(
             result["transcript_length"] = len(primary_text)
             result["original_duration"] = original_duration
             result["trimmed_duration"] = trimmed_duration
+            result["analysis_truncated"] = analysis_truncated
+            result["analysis_iterations"] = analysis_iterations
+            result["merge_truncated"] = merge_truncated
+            result["merge_iterations"] = merge_iterations
 
     except subprocess.CalledProcessError as e:
         result["error"] = f"ffmpeg error: {e.stderr[:500] if e.stderr else str(e)}"

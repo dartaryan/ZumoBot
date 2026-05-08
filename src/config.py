@@ -29,11 +29,9 @@ POLL_INTERVAL = 5  # seconds between status checks
 POLL_TIMEOUT = 1800  # 30 minutes max wait
 
 # --- Claude Models ---
-# NOTE: SONNET_MODEL is misnamed for legacy reasons — it actually points to Opus 4.6,
-# which the analysis agent uses. Don't change it; add new constants alongside.
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
-SONNET_MODEL = "claude-opus-4-6"
-OPUS_MODEL = "claude-opus-4-7"
+ANALYZE_MODEL = "claude-opus-4-6"  # used by analyze_transcript (processor.py)
+OPUS_MODEL = "claude-opus-4-7"     # used by merge_transcripts (merge_agent.py)
 
 # --- Gemini (speaker diarization) ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")

@@ -361,10 +361,10 @@ async def _process_and_reply(
                 logger.error(f"Summary generation failed: {e}")
                 summary = ""
 
-            analysis = None
+            analysis_result = None
             analysis_error = ""
             try:
-                analysis = await loop.run_in_executor(
+                analysis_result = await loop.run_in_executor(
                     None, lambda: analyze_transcript(
                         primary_text, user.anthropic_api_key,
                         session_type, speakers, language,
@@ -376,7 +376,15 @@ async def _process_and_reply(
                 analysis_error = str(e)
                 logger.error(f"Analysis failed, publishing transcript-only: {e}")
 
-            analysis_failed = not analysis
+            analysis_text = analysis_result.text if analysis_result else ""
+            analysis_truncated = bool(analysis_result and analysis_result.truncated)
+            analysis_iterations = analysis_result.iterations if analysis_result else 0
+            analysis_failed = not analysis_text
+
+            analysis_warning = (
+                f"הניתוח נחתך גם אחרי {analysis_iterations} המשכי-אוטומטיים — חסרים סעיפים בסוף"
+                if analysis_truncated else ""
+            )
 
             folder_name = generate_folder_name(
                 session_type, speakers or file_path.stem, timestamp,
@@ -386,8 +394,9 @@ async def _process_and_reply(
                 original_duration, original_duration, 0, timestamp,
             )
             analysis_md = format_analysis_md(
-                analysis, summary, session_type, speakers, timestamp,
-            ) if analysis else None
+                analysis_text, summary, session_type, speakers, timestamp,
+                truncation_warning=analysis_warning,
+            ) if analysis_text else None
 
             ensure_repo_structure(user.dashboard_slug)
             dashboard_url = await loop.run_in_executor(
@@ -409,6 +418,10 @@ async def _process_and_reply(
                 "analysis_failed": analysis_failed,
                 "analysis_error": analysis_error,
                 "merge_error": "",
+                "analysis_truncated": analysis_truncated,
+                "analysis_iterations": analysis_iterations,
+                "merge_truncated": False,
+                "merge_iterations": 0,
             }
         elif hebrew_ai_text or gemini_text:
             # We already have transcriptions — run merge + analysis directly.
@@ -424,10 +437,10 @@ async def _process_and_reply(
             # Merge agent — fold Hebrew AI words + Gemini diarization into a single,
             # speaker-labeled transcript. On failure we fall back to dual-source
             # analysis (Hebrew AI as primary, raw Gemini as side input).
-            merged_text = ""
+            merge_result = None
             merge_error = ""
             try:
-                merged_text = await loop.run_in_executor(
+                merge_result = await loop.run_in_executor(
                     None, lambda: merge_transcripts(
                         hebrew_ai_text=hebrew_ai_text,
                         gemini_text=gemini_text,
@@ -440,6 +453,10 @@ async def _process_and_reply(
             except Exception as e:
                 merge_error = str(e)
                 logger.error(f"Merge agent failed, falling back to dual-source: {e}")
+
+            merged_text = merge_result.text if merge_result else ""
+            merge_truncated = bool(merge_result and merge_result.truncated)
+            merge_iterations = merge_result.iterations if merge_result else 0
 
             if merged_text:
                 primary_text = merged_text
@@ -475,10 +492,10 @@ async def _process_and_reply(
                 summary = ""
 
             # Analysis — non-fatal. On failure we still publish transcript-only.
-            analysis = None
+            analysis_result = None
             analysis_error = ""
             try:
-                analysis = await loop.run_in_executor(
+                analysis_result = await loop.run_in_executor(
                     None, lambda: analyze_transcript(
                         primary_text, user.anthropic_api_key,
                         session_type, speakers, language,
@@ -491,7 +508,35 @@ async def _process_and_reply(
                 analysis_error = str(e)
                 logger.error(f"Analysis failed, publishing transcript-only: {e}")
 
-            analysis_failed = not analysis  # covers exception AND empty/None
+            analysis_text = analysis_result.text if analysis_result else ""
+            analysis_truncated = bool(analysis_result and analysis_result.truncated)
+            analysis_iterations = analysis_result.iterations if analysis_result else 0
+            analysis_failed = not analysis_text  # covers exception AND empty/None
+
+            # Build truncation banners. Merge-side truncation is the worse
+            # failure (analysis ran on partial source), so when both happened
+            # the analysis banner mentions both.
+            if merge_truncated and analysis_truncated:
+                analysis_warning = (
+                    f"מיזוג התמלול נחתך אחרי {merge_iterations} המשכי-אוטומטיים, "
+                    f"וגם הניתוח נחתך אחרי {analysis_iterations} — חסרים גם מקור וגם תוכן בסוף."
+                )
+            elif merge_truncated:
+                analysis_warning = (
+                    f"מיזוג התמלול נחתך אחרי {merge_iterations} המשכי-אוטומטיים — "
+                    f"הניתוח רץ על תמלול חלקי."
+                )
+            elif analysis_truncated:
+                analysis_warning = (
+                    f"הניתוח נחתך גם אחרי {analysis_iterations} המשכי-אוטומטיים — חסרים סעיפים בסוף."
+                )
+            else:
+                analysis_warning = ""
+
+            merge_warning = (
+                f"חלק מהשיחה לא נכלל בתמלול המאוחד (נחתך אחרי {merge_iterations} המשכי-אוטומטיים)"
+                if merge_truncated else ""
+            )
 
             folder_name = generate_folder_name(
                 session_type, speakers or file_path.stem, timestamp,
@@ -499,10 +544,12 @@ async def _process_and_reply(
             transcript_md = format_transcript_md(
                 primary_text, file_path.stem, session_type, speakers, language,
                 original_duration, original_duration, 0, timestamp,
+                merge_warning=merge_warning,
             )
             analysis_md = format_analysis_md(
-                analysis, summary, session_type, speakers, timestamp,
-            ) if analysis else None
+                analysis_text, summary, session_type, speakers, timestamp,
+                truncation_warning=analysis_warning,
+            ) if analysis_text else None
 
             ensure_repo_structure(user.dashboard_slug)
             dashboard_url = await loop.run_in_executor(
@@ -524,6 +571,10 @@ async def _process_and_reply(
                 "analysis_failed": analysis_failed,
                 "analysis_error": analysis_error,
                 "merge_error": merge_error,
+                "analysis_truncated": analysis_truncated,
+                "analysis_iterations": analysis_iterations,
+                "merge_truncated": merge_truncated,
+                "merge_iterations": merge_iterations,
             }
         else:
             # Fallback: run the full pipeline
@@ -567,6 +618,16 @@ async def _process_and_reply(
             if reason:
                 note += f" ({reason[:100]})"
             notes.append(note)
+        if result.get("merge_truncated"):
+            n = result.get("merge_iterations", 0)
+            notes.append(
+                f"⚠️ מיזוג התמלול נחתך אחרי {n} המשכי-אוטומטיים — חלק מהשיחה לא נכלל"
+            )
+        if result.get("analysis_truncated"):
+            n = result.get("analysis_iterations", 0)
+            notes.append(
+                f"⚠️ הניתוח נחתך גם אחרי {n} המשכי-אוטומטיים — חסרים סעיפים בסוף"
+            )
         if result.get("analysis_failed"):
             reason = result.get("analysis_error", "")
             note = "⚠️ ניתוח נכשל — תמלול בלבד זמין בעמוד"
@@ -590,6 +651,28 @@ async def _process_and_reply(
             pass
         # Send a NEW message so Telegram fires a push notification
         await status_msg.reply_text(summary_text)
+
+        # Truncation = data loss. Send a separate prominent alert so it's not
+        # buried inside the success summary's notes block.
+        if result.get("analysis_truncated") or result.get("merge_truncated"):
+            alert_lines = ["⚠️ ⚠️ ⚠️ תוכן חסר בקובץ! ⚠️ ⚠️ ⚠️", ""]
+            if result.get("merge_truncated"):
+                alert_lines.append(
+                    f"• התמלול המאוחד נחתך אחרי {result.get('merge_iterations', 0)} ניסיונות המשך — "
+                    f"חלק מהשיחה לא תועתק."
+                )
+            if result.get("analysis_truncated"):
+                alert_lines.append(
+                    f"• הניתוח עצמו נחתך אחרי {result.get('analysis_iterations', 0)} ניסיונות המשך — "
+                    f"חסרים סעיפים בסוף הקובץ."
+                )
+            alert_lines += [
+                "",
+                "ראה ⚠️ באנר בראש הקובץ. שקול הרצה מחדש או השלמה ידנית.",
+                "",
+                link,
+            ]
+            await status_msg.reply_text("\n".join(alert_lines))
     else:
         err = result.get("error", "Unknown")[:500]
         try:

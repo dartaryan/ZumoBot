@@ -3,9 +3,10 @@
 import logging
 from pathlib import Path
 
-from anthropic import Anthropic, APIStatusError
+from anthropic import Anthropic
 
-from .config import HAIKU_MODEL, SONNET_MODEL
+from .anthropic_stream import StreamResult, stream_with_continuation
+from .config import ANALYZE_MODEL, HAIKU_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +46,11 @@ def analyze_transcript(
     session_type: str,
     speakers: str,
     language: str = "he",
-    model: str = SONNET_MODEL,
+    model: str = ANALYZE_MODEL,
     user_requests: str = "full analysis",
     gemini_text: str = "",
     merged: bool = False,
-) -> str:
+) -> StreamResult:
     """Full structured analysis using the Zumo Bot agent prompt.
 
     Three modes, in order of preference:
@@ -59,10 +60,19 @@ def analyze_transcript(
         the merge agent failed; sends Hebrew AI + Gemini side-by-side.
       - merged=False with no `gemini_text` → single-source fallback.
 
-    Returns empty string if no api_key.
+    Returns a StreamResult. Empty StreamResult (text="", iterations=0) if no
+    api_key — callers detect this via `result.text` falsiness.
+
+    max_tokens=32000 matches the Opus 4.6 ceiling. The wrapper auto-continues
+    via assistant-prefill when the model still hits max_tokens, and exposes
+    `truncated=True` when even continuation can't finish — callers must surface
+    that to the user instead of silently shipping a partial analysis.
     """
     if not api_key:
-        return ""
+        return StreamResult(
+            text="", stop_reason="", iterations=0, truncated=False,
+            total_input_tokens=0, total_output_tokens=0,
+        )
 
     if merged or not gemini_text:
         user_message = (
@@ -75,7 +85,6 @@ def analyze_transcript(
             f"{transcript_text[:100000]}"
         )
     else:
-        # Legacy dual-source fallback: merge agent unavailable or failed.
         user_message = (
             f"Session Type: {session_type}\n"
             f"Speakers: {speakers or 'Not specified'}\n"
@@ -89,22 +98,11 @@ def analyze_transcript(
             f"{gemini_text[:100000]}"
         )
 
-    # Streaming is required by Anthropic when a request may exceed the 10-minute
-    # runtime estimate. With Opus + max_tokens=16384 + ~200K chars of input this
-    # threshold is crossed and non-streaming requests are rejected with HTTP 400.
     client = Anthropic(api_key=api_key)
-    try:
-        with client.messages.stream(
-            model=model,
-            max_tokens=16384,
-            system=_AGENT_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": user_message,
-            }],
-        ) as stream:
-            return "".join(stream.text_stream)
-    except APIStatusError as e:
-        body = getattr(getattr(e, "response", None), "text", "") or str(e)
-        logger.error("analyze_transcript Anthropic %s: %s", e.status_code, body)
-        raise
+    return stream_with_continuation(
+        client=client,
+        model=model,
+        max_tokens=32000,
+        system=_AGENT_PROMPT,
+        user_message=user_message,
+    )
