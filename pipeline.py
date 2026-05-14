@@ -64,6 +64,7 @@ def process_file(
     zoom_vtt_path: Path | None = None,
     user_requests: str = "full analysis",
     gemini_api_key: str | None = None,
+    folder_name: str | None = None,
 ) -> dict:
     """Main pipeline: audio -> compress -> dual transcribe -> analyze -> save."""
 
@@ -300,9 +301,10 @@ def process_file(
 
             # --- Step 8: Format & Save ---
             print("\n[8/8] Saving...")
-            folder_name = generate_folder_name(
-                session_type, speakers or file_path.stem, timestamp,
-            )
+            if folder_name is None:
+                folder_name = generate_folder_name(
+                    session_type, speakers or file_path.stem, timestamp,
+                )
 
             transcript_md = format_transcript_md(
                 primary_text, file_path.stem, session_type, speakers, language,

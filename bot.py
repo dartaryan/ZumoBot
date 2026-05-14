@@ -95,12 +95,66 @@ _CONVERSATION_KEYS = [
     "tmp_dir", "file_path", "file_name", "user", "language",
     "status_msg", "session_type", "speakers", "purpose", "output_format",
     "extra_context", "gemini_text", "hebrew_ai_text", "text_input",
-    "preprocess_task", "preprocess_done",
+    "preprocess_task", "preprocess_done", "folder_name",
     "proceed_started", "confirm_started", "last_prompt_msg_id",
 ]
 
 MAX_TEXT_INPUT_BYTES = 500 * 1024
 MAX_TEXT_INPUT_CHARS = 200_000
+
+
+def _clamp_preview(text: str, limit: int) -> str:
+    """Clamp a string for echo-back in a Telegram message.
+
+    Full value is kept in user_data and fed to the analyze stage — only the
+    preview is shortened so the summary stays under Telegram's 4096-char cap.
+    """
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"…\n[+{len(text) - limit:,} תווים נוספים נשמרו]"
+
+
+def _build_input_md(
+    session_type: str, speakers: str, purpose: str,
+    output_format: str, extra: list[str], timestamp,
+) -> str:
+    """Build input.md content from confirm-time metadata.
+
+    Stores the FULL purpose and extra_context — the in-summary preview was
+    clamped, but the on-disk record keeps everything so a crashed session
+    still has a complete record of what was asked.
+    """
+    type_info = SESSION_TYPES.get(session_type, {})
+    type_label = type_info.get("he", session_type)
+    format_label = FORMAT_LABELS.get(output_format, output_format)
+    extra_block = "\n\n".join(extra) if extra else "—"
+    return (
+        f"# Session input\n\n"
+        f"- Type: {type_label} ({session_type})\n"
+        f"- Speakers: {speakers or '—'}\n"
+        f"- Format: {format_label} ({output_format})\n"
+        f"- Created: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"## Purpose\n\n{purpose or '—'}\n\n"
+        f"## Extra context\n\n{extra_block}\n"
+    )
+
+
+async def _upload_to_github(filepath: str, content: str, commit_message: str):
+    """Fire-and-forget upload to GitHub. Logs failures, never raises.
+
+    Used for incremental saves (input.md, raw transcripts) — a network blip
+    must not block the main pipeline.
+    """
+    from src.storage import save_file_to_github
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(
+            None,
+            lambda: save_file_to_github(filepath, content, commit_message),
+        )
+        logger.info(f"Uploaded {filepath} to GitHub")
+    except Exception as e:
+        logger.error(f"Failed to upload {filepath}: {e}")
 
 
 def parse_caption(caption: str | None) -> dict:
@@ -318,6 +372,7 @@ async def _process_and_reply(
     status_msg, file_path, file_name, user,
     session_type, speakers, language, user_requests, telegram_id,
     hebrew_ai_text="", gemini_text="", text_input="",
+    folder_name: str = "",
 ):
     """Run the pipeline and send the result.
 
@@ -386,9 +441,10 @@ async def _process_and_reply(
                 if analysis_truncated else ""
             )
 
-            folder_name = generate_folder_name(
-                session_type, speakers or file_path.stem, timestamp,
-            )
+            if not folder_name:
+                folder_name = generate_folder_name(
+                    session_type, speakers or file_path.stem, timestamp,
+                )
             transcript_md = format_transcript_md(
                 primary_text, file_path.stem, session_type, speakers, language,
                 original_duration, original_duration, 0, timestamp,
@@ -538,9 +594,10 @@ async def _process_and_reply(
                 if merge_truncated else ""
             )
 
-            folder_name = generate_folder_name(
-                session_type, speakers or file_path.stem, timestamp,
-            )
+            if not folder_name:
+                folder_name = generate_folder_name(
+                    session_type, speakers or file_path.stem, timestamp,
+                )
             transcript_md = format_transcript_md(
                 primary_text, file_path.stem, session_type, speakers, language,
                 original_duration, original_duration, 0, timestamp,
@@ -593,6 +650,7 @@ async def _process_and_reply(
                     skip_analysis=False,
                     skip_diarization=False,
                     user_requests=user_requests,
+                    folder_name=folder_name or None,
                 ),
             )
     finally:
@@ -1142,24 +1200,24 @@ async def _proceed_to_confirm(message, context: ContextTypes.DEFAULT_TYPE):
     type_label = type_info.get("he", session_type)
     format_label = _format_label(output_format)
 
+    # Telegram caps a single message at 4096 chars. Full values stay in
+    # user_data and feed the analyze stage — only the echoed preview is
+    # clamped. Budget: 500 + 1000 + 2000 + ~300 overhead = 3800 chars.
+    speakers_preview = _clamp_preview(speakers, 500) if speakers else "לא צוין"
+    purpose_preview = _clamp_preview(purpose, 1000) if purpose else "ניתוח מלא"
+
     summary_lines = [
         f"סוג: {type_label}",
-        f"דוברים: {speakers or 'לא צוין'}",
-        f"מטרה: {purpose or 'ניתוח מלא'}",
+        f"דוברים: {speakers_preview}",
+        f"מטרה: {purpose_preview}",
         f"פורמט: {format_label}",
     ]
     if extra:
-        # Telegram caps a single message at 4096 chars. The full extra context
-        # is still stored in user_data and fed to analysis — we only truncate
-        # what we echo back in the summary.
         joined = "; ".join(extra)
         total_chars = len(joined)
-        preview_limit = 2000
-        if total_chars > preview_limit:
-            preview = joined[:preview_limit] + f"…\n[+{total_chars - preview_limit:,} תווים נוספים נשמרו]"
-        else:
-            preview = joined
-        summary_lines.append(f"הקשר נוסף ({total_chars:,} תווים): {preview}")
+        summary_lines.append(
+            f"הקשר נוסף ({total_chars:,} תווים): {_clamp_preview(joined, 2000)}"
+        )
 
     # Check preprocess status
     preprocess_task = context.user_data.get("preprocess_task")
@@ -1240,6 +1298,28 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = context.user_data["status_msg"]
     telegram_id = update.effective_user.id
 
+    # Decide the session folder name NOW (not at save time) so every
+    # incremental artifact lands in the same folder, even if a later step
+    # crashes. Same slugifier as the pipeline → identical naming.
+    from src.formatter import generate_folder_name
+    from datetime import datetime
+    confirm_ts = datetime.now()
+    folder_name = generate_folder_name(
+        session_type, speakers or file_path.stem, confirm_ts,
+    )
+    context.user_data["folder_name"] = folder_name
+    base_path = f"{user.dashboard_slug}/{folder_name}"
+
+    # Upload input.md immediately — if anything below crashes, the GitHub
+    # folder still shows what was asked for. Fire-and-forget so a slow
+    # GitHub API call doesn't block the pipeline.
+    input_md = _build_input_md(
+        session_type, speakers, purpose, output_format, extra, confirm_ts,
+    )
+    asyncio.create_task(_upload_to_github(
+        f"{base_path}/input.md", input_md, f"Add: {folder_name} — input",
+    ))
+
     # Wait for preprocess if not done
     preprocess_task = context.user_data.get("preprocess_task")
     hebrew_ai_text = context.user_data.get("hebrew_ai_text", "")
@@ -1259,6 +1339,21 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             hebrew_ai_text = ""
             gemini_text = ""
 
+    # Upload raw transcripts as soon as they're available — merge/analysis
+    # crashes after this point still leave both raw transcripts on GitHub.
+    if hebrew_ai_text:
+        asyncio.create_task(_upload_to_github(
+            f"{base_path}/transcript-hebrew-ai.md",
+            hebrew_ai_text,
+            f"Add: {folder_name} — Hebrew AI transcript",
+        ))
+    if gemini_text:
+        asyncio.create_task(_upload_to_github(
+            f"{base_path}/transcript-gemini.md",
+            gemini_text,
+            f"Add: {folder_name} — Gemini transcript",
+        ))
+
     try:
         await _process_and_reply(
             status_msg, file_path, file_name, user,
@@ -1267,6 +1362,7 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             hebrew_ai_text=hebrew_ai_text,
             gemini_text=gemini_text,
             text_input=context.user_data.get("text_input", ""),
+            folder_name=folder_name,
         )
     except Exception as e:
         logger.error(f"Error processing file from {telegram_id}: {e}")
